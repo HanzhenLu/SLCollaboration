@@ -18,7 +18,7 @@ import tree_sitter_python as tspython
 
 logger = logging.getLogger(__name__)
 
-def format_example(args, tokenizer,special_token_ids,example: Example):
+def format_example(args, tokenizer, example:Example):
     prefix = example.prefix
     suffix = example.suffix
 
@@ -40,12 +40,18 @@ def format_example(args, tokenizer,special_token_ids,example: Example):
         else:
             small_relevant = example.small_relevant_codes
 
-    large_input, small_input = relevent_contexts(small_relevant, example.relevant_codes, tokenizer, cross_file_budget, small_repo_percent=args.repo_percent) #100% repo
+    large_input, small_input = relevent_contexts(small_relevant[:args.relevant_code_num], example.relevant_codes[:args.relevant_code_num], \
+        tokenizer, cross_file_budget, small_repo_percent=args.repo_percent) #100% repo
+    
+    if args.large_model_type is None:
+        repo_input = small_input
+    else:
+        repo_input = large_input
     
     prefix_tokenized_result = tokenizer(prefix, add_special_tokens=False)
     suffix_tokenized_result = tokenizer(suffix, add_special_tokens=False)
     
-    left_budget = args.max_input_length - len(small_input["input_ids"]) - 4
+    left_budget = args.max_input_length - len(repo_input["input_ids"]) - 4
     prefix_length = int(left_budget / 2)
     suffix_length = int(left_budget - prefix_length)
     if len(prefix_tokenized_result["input_ids"]) < prefix_length and len(suffix_tokenized_result["input_ids"]) < suffix_length:
@@ -63,16 +69,15 @@ def format_example(args, tokenizer,special_token_ids,example: Example):
         prefix_ids = prefix_tokenized_result["input_ids"][-prefix_length:]
         suffix_ids = suffix_tokenized_result["input_ids"][:suffix_length]
     
-    input_id = [special_token_ids["suffix_id"]] + suffix_ids + [special_token_ids["prefix_id"]] + small_input["input_ids"] + prefix_ids + [special_token_ids["middle_id"]]
     # 上下文检索的+根据小模型检索的，用于双模型解码模式
-    repo_str = tokenizer.decode(large_input["input_ids"], skip_special_tokens=False)
+    repo_str = tokenizer.decode(repo_input["input_ids"], skip_special_tokens=False)
     
     ### 只有根据上下文检索的,用于单一模型解码模式
     # repo_str = tokenizer.decode(small_input["input_ids"], skip_special_tokens=False)  
     
     prefix_str = tokenizer.decode(prefix_ids,skip_special_tokens=True)
     suffix_str = tokenizer.decode(suffix_ids,skip_special_tokens=True)
-    return torch.tensor(input_id, dtype=torch.long), repo_str, prefix_str, suffix_str
+    return repo_str, prefix_str, suffix_str
 # --------------------------
 
 def main():
@@ -84,20 +89,18 @@ def main():
     parser.add_argument("--lang", type=str, default="python", help="Programming language.")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device to use (cuda or cpu).")
     parser.add_argument("--max_input_length", type=int, default=2048, help="Maximum generation length.")
-    parser.add_argument("--stmts", type=str, default='false')
+    parser.add_argument("--stmts",action="store_true")
     parser.add_argument("--repo_percent",type=float,required=True)
-    parser.add_argument("--trigger", type=str, default='false', help="larger model use trigger")
-    parser.add_argument("--full", type=str, default='false', help="use full line to retrive for small models' output")
+    parser.add_argument("--trigger", action="store_true", help="larger model use trigger")
+    parser.add_argument("--full", action="store_true", help="use full line to retrive for small models' output")
     parser.add_argument("--one_model", action="store_true")
     parser.add_argument("--twice", action="store_true")
     parser.add_argument("--without_sp", action="store_true")
     parser.add_argument("--large_model_type", default=None, choices=["qwen", "starcoder", "deepseek", None])
+    parser.add_argument("--relevant_code_num", default=5, type=int)
     
 
     args = parser.parse_args()
-    args.stmts = (args.stmts.lower() == 'true')
-    args.trigger = (args.trigger.lower() == 'true')
-    args.full = (args.full.lower()=='true')
     print(args.stmts)
     logging.basicConfig(level=logging.INFO)
     logger.info(f"Using device: {args.device}")
@@ -201,17 +204,10 @@ def main():
     # all_eval_examples[f"{bn}"] = examples
     # for testing end
     
-    
-    special_token_ids = {
-        "prefix_id": s_tokenizer.convert_tokens_to_ids("<PREFIX>"),
-        "suffix_id": s_tokenizer.convert_tokens_to_ids("<SUFFIX>"),
-        "middle_id": s_tokenizer.convert_tokens_to_ids("<MIDDLE>"),
-        "eos_id": s_tokenizer.convert_tokens_to_ids("<EOS>")
-    }
     for name,examples in tqdm(all_eval_examples.items(),desc="Formatting"):
         print(name)
         for example in examples:
-            example.input_ids, example.relevent_str, example.prefix_str, example.suffix_str = format_example(args,s_tokenizer,special_token_ids,example)
+            example.relevent_str, example.prefix_str, example.suffix_str = format_example(args, l_tokenizer if args.large_model_type else s_tokenizer, example)
             
     # 4. 初始化双模型解码器
     if args.one_model:

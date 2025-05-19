@@ -309,15 +309,11 @@ def cross_file_contexts(related_codes:List[CodeBlock], tokenizer:PreTrainedToken
     
     return repo_content
 
-def relevent_contexts(small_related_code,repo_related_codes:List[CodeBlock], tokenizer:PreTrainedTokenizer, cross_file_budget:int, small_repo_percent:float=0.8) -> Dict[str, List[int]]:
+def relevent_contexts(small_related_code:List[CodeBlock], repo_related_codes:List[CodeBlock], tokenizer:PreTrainedTokenizer, cross_file_budget:int, small_repo_percent:float=0.8) -> Dict[str, List[int]]:
     filter_small_codeblocks = []
     for x in small_related_code:
         file_path = x.file_path
         code_content = x.code_content
-        # if file_path != "" and file_path != "Unknown":
-        #     filter_small_codeblocks.append(f"#{file_path}\n{code_content}" if code_content.endswith("\n") else f"#{file_path}\n{code_content}\n")
-        # else:
-        #     break
         filter_small_codeblocks.append(f"{code_content}")
 
     filter_repo_codeblocks = []
@@ -363,22 +359,10 @@ def relevent_contexts(small_related_code,repo_related_codes:List[CodeBlock], tok
         small_budget = int((1 - small_repo_percent) * cross_file_budget)
         repo_budget = int(small_repo_percent * cross_file_budget)
     
+    repo_content["input_ids"] =  related_tokenized_small_result["input_ids"][0][:small_budget]+related_tokenized_repo_result["input_ids"][0][:repo_budget]
+    repo_content["attention_mask"] = related_tokenized_small_result["attention_mask"][0][:small_budget]+related_tokenized_repo_result["attention_mask"][0][:repo_budget]
     
-    special_tokens = tokenizer.all_special_tokens
-    if "<RETRIEVAL_START>" in special_tokens and "<RETRIEVAL_END>" in special_tokens:
-        repo_content["input_ids"] = [tokenizer.convert_tokens_to_ids("<RETRIEVAL_START>")] + related_tokenized_small_result["input_ids"][0][:small_budget]+\
-            related_tokenized_repo_result["input_ids"][0][:repo_budget-2]+  [tokenizer.convert_tokens_to_ids("<RETRIEVAL_END>")]
-        repo_content["attention_mask"] = [1] + related_tokenized_small_result["attention_mask"][0][:small_budget] + related_tokenized_repo_result["attention_mask"][0][:repo_budget-2]+ [1]
-    else:
-        repo_content["input_ids"] =  related_tokenized_small_result["input_ids"][0][:small_budget]+related_tokenized_repo_result["input_ids"][0][:repo_budget]
-        repo_content["attention_mask"] = related_tokenized_small_result["attention_mask"][0][:small_budget]+related_tokenized_repo_result["attention_mask"][0][:repo_budget]
-    
-    if "<RETRIEVAL_START>" in special_tokens and "<RETRIEVAL_END>" in special_tokens:
-        small_input_content["input_ids"] = [tokenizer.convert_tokens_to_ids("<RETRIEVAL_START>")] +\
-            related_tokenized_repo_result["input_ids"][0][:cross_file_budget-2]+  [tokenizer.convert_tokens_to_ids("<RETRIEVAL_END>")]
-        small_input_content["attention_mask"] = [1] + related_tokenized_repo_result["attention_mask"][0][:cross_file_budget-2]+ [1]
-    else:
-        small_input_content["input_ids"] =  related_tokenized_repo_result["input_ids"][0][:cross_file_budget]
-        small_input_content["attention_mask"] = related_tokenized_repo_result["attention_mask"][0][:cross_file_budget]
+    small_input_content["input_ids"] =  related_tokenized_repo_result["input_ids"][0][:cross_file_budget]
+    small_input_content["attention_mask"] = related_tokenized_repo_result["attention_mask"][0][:cross_file_budget]
     ## repocontent 是包含小模型检索的内容，small——input就是只有根据上下文检索的
     return repo_content, small_input_content
