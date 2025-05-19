@@ -1,0 +1,8 @@
+.vscode/
+__pycache__/
+outputs/
+ablation/
+preprocessed_retrieval_twice/
+*.lprof
+*.sh
+*.ipynb
