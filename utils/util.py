@@ -8,14 +8,6 @@ import pickle
 from typing import Tuple, List, Dict
 from transformers import PreTrainedTokenizer
 
-# class Example:
-#     def __init__(self, task_id:str, prefix:str, suffix:str, middle:str, relevant_codes:List["CodeBlock"]) -> None:
-#         self.task_id = task_id
-#         self.prefix = prefix
-#         self.suffix = suffix
-#         self.middle = middle
-#         self.relevant_code = relevant_codes
-
 class InputFeatures(object):
     """A single training/test features for a example."""
     def __init__(self,
@@ -26,19 +18,6 @@ class InputFeatures(object):
         self.input_ids = input_ids
         self.attention_mask = attention_mask
         self.target_ids = target_ids
-
-# class CodeBlock(object):
-#     def __init__(self, file_path:str, code_content:str):
-#         """
-#         Represents a block of code.
-#         :param file_path: The path to the code file.
-#         :param code_content: The content of the code block.
-#         """
-#         self.file_path:str = file_path
-#         self.code_content:str = code_content
-
-#     def __str__(self):
-#         return self.code_content
 
 TRIGGER_POINT = [
     ".",

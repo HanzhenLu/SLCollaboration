@@ -11,8 +11,8 @@ import os
 from datetime import datetime
 # gc
 import gc
-from decoding import SingleModelDecoding
-from single_decoding import SPDecoding 
+from single_decoding import SingleModelDecoding
+from dual_decoding import SPDecoding 
 from tree_sitter import Language, Parser
 import tree_sitter_python as tspython
 
@@ -80,7 +80,7 @@ def main():
     parser.add_argument("--l_model_name_or_path",  type=str,default="/data/chuyangxu/lhz/model/Qwen/Qwen2.5-Coder-7B", help="Path to the large model.")
     parser.add_argument("--s_model_name_or_path",  type=str,default="/data/chuyangxu/lhz/model/opc-sft-v1-modified", help="Path to the small model.")
 
-    parser.add_argument("--output_dir",  type=str,default='output', help="Path to save the generated outputs.")
+    parser.add_argument("--output_dir",  type=str, default='outputs', help="Path to save the generated outputs.")
     parser.add_argument("--lang", type=str, default="python", help="Programming language.")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device to use (cuda or cpu).")
     parser.add_argument("--max_input_length", type=int, default=2048, help="Maximum generation length.")
@@ -210,11 +210,8 @@ def main():
     }
     for name,examples in tqdm(all_eval_examples.items(),desc="Formatting"):
         print(name)
-        if name=='repoeval_func' or name=='ours_func':
-            examples = [example for x in examples for example in x]
-            print(len(examples))
         for example in examples:
-            example.input_ids,example.relevent_str,example.prefix_str,example.suffix_str = format_example(args,s_tokenizer,special_token_ids,example)
+            example.input_ids, example.relevent_str, example.prefix_str, example.suffix_str = format_example(args,s_tokenizer,special_token_ids,example)
             
     # 4. 初始化双模型解码器
     if args.one_model:
@@ -242,14 +239,11 @@ def main():
             raise RuntimeError("Unsupport model type")
     else:
         decoder = SPDecoding(
-            l_model=l_model,
-            l_model_type=args.large_model_type, # e.g., 'deepseek', 'qwen'
-            l_tokenizer=l_tokenizer,
+            model=l_model,
+            model_type=args.large_model_type, # e.g., 'deepseek', 'qwen'
+            tokenizer=l_tokenizer,
             device=args.device,
             lang=args.lang,
-            s_model=s_model,
-            s_model_type="opc", # e.g., 'opc', 'llama'
-            s_tokenizer=s_tokenizer,
             parser=parser,
             without_sp=args.without_sp
         )
@@ -260,14 +254,11 @@ def main():
     flash = 5
    
     for key, examples in tqdm(all_eval_examples.items(), desc="Generating"):
-        if decoder.task!=key:
+        if decoder.task != key:
             decoder.set_task(key)
             print(f"Switching to {key} task")
-        if key=='repoeval_func' or key=='ours_func':
-            examples = [example for x in examples for example in x]
+
         time_stats[key] = {}
-        # 开始计时
-        # start_time = time.time()
         i = 0
         results = []
         logger.info("Evaluating on {} dataset".format(key))
@@ -276,40 +267,28 @@ def main():
             for example in tqdm(examples):
                 sample_start_time = time.time()
                 if args.one_model:
-                    generated_code, small_output = decoder.generate(
-                        input_ids=example.input_ids,
-                        max_length=args.max_input_length,
+                    generated_code = decoder.generate(
                         prefix=example.prefix_str,
                         suffix=example.suffix_str,
                         relevent_str=example.relevent_str,
-                        key=key,
                         ground_truth=example.middle,
                         prompt=example.prefix
                     )
                 else:
-                    generated_code, small_output = decoder.generate(
-                        input_ids=example.input_ids,
-                        max_length=args.max_input_length,
+                    generated_code = decoder.generate(
                         prefix=example.prefix_str,
                         suffix=example.suffix_str,
                         relevent_str=example.relevent_str,
-                        key=key,
                         ground_truth=example.middle,
                         trigger_point_idx=example.trigger_point_idx if args.trigger else None,
-                        prompt=example.prefix
+                        prompt=example.prefix,
+                        small_output=example.small_pred
                     )
-                # print(example.task_id)
-                # print("groundtruth:",example.middle)
-                # print("trigger input",example.middle[:example.trigger_point_idx])
-                # print("generated code",generated_code)
+
                 sample_end_time = time.time()
                 if args.trigger:
-                    if small_output!=None:
+                    if example.trigger_point_idx != None:
                         generated_code = example.middle[:example.trigger_point_idx]+generated_code
-                    else:
-                        generated_code = generated_code
-                else:
-                    generated_code = generated_code
                     
                 results.append({
                     "id": example.task_id,
@@ -318,10 +297,9 @@ def main():
                     "generated": generated_code,
                     "ground_truth":example.middle,
                     "time": sample_end_time - sample_start_time,
-                    "small_output":small_output,
-                    'original_small_ouput':example.small_pred
+                    "small_output":example.small_pred
                 })
-                i+=1
+                i += 1
                 # del generated_code
                 if i % flash == 0:
                     # logger.info(f"Empty GPU memory")
@@ -346,7 +324,7 @@ def main():
             with open(save_path, "w", encoding="utf-8") as f:
                 for result in tqdm(results,desc='Saving'):
                     f.write(json.dumps({"task_id": result["id"], "pred": result["generated"],"time":result['time'],'small_output':result['small_output'], \
-                        'ground_truth':result['ground_truth'],'prefix':result['prefix'],'suffix':result['suffix'],'original_small_ouput':result['original_small_ouput']}) + "\n")
+                        'ground_truth':result['ground_truth'],'prefix':result['prefix'],'suffix':result['suffix']}) + "\n")
         results = compute_metric_stmt(f"{args.output_dir}/result/{key}", args)
 
         # 将评估结果添加到时间统计中
@@ -361,18 +339,6 @@ def main():
     
     logger.info(f"Time statistics saved to {time_stats_path}")
     logger.info("Generation finished.")
-
-def generate_dual_story(prompt, model1, model2):
-    # 分别生成并立即保存结果
-    story1 = model1.generate(prompt).text
-    # 清理第一个生成的中间结果
-    torch.cuda.empty_cache()
-    
-    story2 = model2.generate(prompt).text
-    # 清理第二个生成的中间结果
-    torch.cuda.empty_cache()
-    
-    return story1, story2
 
 if __name__ == "__main__":
     main()
