@@ -115,6 +115,10 @@ def main():
             l_model = AutoModelForCausalLM.from_pretrained(args.l_model_name_or_path,torch_dtype=torch.float16).to(args.device)
             l_model.eval()
             logger.info("Large model loaded.")
+            
+            if l_tokenizer.pad_token is None:
+                l_tokenizer.pad_token = l_tokenizer.eos_token
+            
         else:
             logger.info(f"Loading small model from {args.s_model_name_or_path}")
             s_tokenizer = AutoTokenizer.from_pretrained(args.s_model_name_or_path)
@@ -122,7 +126,9 @@ def main():
             s_model.eval()
             logger.info("Small model loaded.")
             
-        s_tokenizer = AutoTokenizer.from_pretrained(args.s_model_name_or_path)
+            if s_tokenizer.pad_token is None:
+                s_tokenizer.pad_token = s_tokenizer.eos_token
+            
     else:
         # 1. 加载大模型和 Tokenizer
         logger.info(f"Loading large model from {args.l_model_name_or_path}")
@@ -137,14 +143,18 @@ def main():
         s_model = AutoModelForCausalLM.from_pretrained(args.s_model_name_or_path).to(args.device)
         s_model.eval()
         logger.info("Small model loaded.")
+        
+        if l_tokenizer.pad_token is None:
+            l_tokenizer.pad_token = l_tokenizer.eos_token
+        
+        if s_tokenizer.pad_token is None:
+            s_tokenizer.pad_token = s_tokenizer.eos_token
     
     ## 加载parser
     PY_LANGUAGE = Language(tspython.language())
     parser = Parser(PY_LANGUAGE)
 
     step = "step7-more"
-    if s_tokenizer.pad_token is None:
-        s_tokenizer.pad_token = s_tokenizer.eos_token
     all_eval_examples = {
         "ours": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours-5.pkl"),
         "ours_suffix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_suffix-5.pkl"),
