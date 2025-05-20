@@ -18,23 +18,43 @@ class PythonStatementStoppingCriteria(StoppingCriteria):
             generated_ids = seq[self.input_ids_len:]
             new_text:str = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
             
-            # 至少要生成到行末才会被接受
+            # 至少要生成出一行末才会被接受
             if "\n" not in new_text:
                 return False
             
             code = self.prompt
             new_text_lines = new_text.splitlines(keepends=True)
-            for i, line in enumerate(new_text_lines):
+            parse_valid = False
+            for line in new_text_lines:
                 code = code + line
                 if is_parse_valid(self.parser, code):
+                    parse_valid = True
                     break
             
             # 说明这一支仍然没生成出能被正确解析的语句，需要继续生成
-            if i == len(new_text_lines):
+            if not parse_valid:
                 return False
         
         # 如果从循环中退出，说明所有分支都已经有了能够被正确解析的语句，可以结束生成了
         return True
+        
+class PythonLineStoppingCriteria(StoppingCriteria):
+    def __init__(self, tokenizer, input_ids_len):
+        self.tokenizer = tokenizer
+        self.input_ids_len = input_ids_len  # 原始 prompt 的 token 长度
+
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
+        for seq in input_ids:
+            # 获取新生成的部分（不包含 prompt）
+            generated_ids = seq[self.input_ids_len:]
+            new_text:str = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+            
+            # 至少要生成出一行末才会被接受
+            if "\n" not in new_text:
+                return False
+        
+        # 如果从循环中退出，说明所有分支都已经生成了至少一行，可以结束生成了
+        return True        
         
 class SingleModelDecoding:
     def __init__(self, model, model_type, tokenizer, device, lang, parser, twice=False):
@@ -106,9 +126,14 @@ class SingleModelDecoding:
         else:
             raise RuntimeError("Unsupported model")
         attention_mask = torch.ones_like(context_ids).to(self.device)
-
+        
         # 生成
         with torch.no_grad():
+            if self.task == "repoeval_line" or self.task == "repoeval_line_prefix":
+                stopping_criteria = StoppingCriteriaList([PythonLineStoppingCriteria(self.tokenizer, context_ids.shape[1])])
+            else:
+                stopping_criteria = StoppingCriteriaList([PythonStatementStoppingCriteria(self.tokenizer, kwargs["prompt"], context_ids.shape[1], self.parser, self.NL_list)])
+            
             if self.twice:
                 
                 generation_config = GenerationConfig(
@@ -117,8 +142,7 @@ class SingleModelDecoding:
                     do_sample=False,
                     max_new_tokens=64,
                     pad_token_id=self.tokenizer.pad_token_id,
-                    eos_token_id=2 if self.model_type == "opc" else self.tokenizer.eos_token_id,
-                    stop_strings=["\n"] if self.task == "repoeval_line" or self.task == "repoeval_line_prefix" else None
+                    eos_token_id=2 if self.model_type == "opc" else self.tokenizer.eos_token_id
                 )
                 
                 outputs = self.model.generate(
@@ -126,7 +150,7 @@ class SingleModelDecoding:
                     attention_mask=attention_mask,
                     generation_config=generation_config,
                     tokenizer=self.tokenizer,
-                    stopping_criteria=StoppingCriteriaList([PythonStatementStoppingCriteria(self.tokenizer, kwargs["prompt"], context_ids.shape[1], self.parser, self.NL_list)])
+                    stopping_criteria=stopping_criteria
                     # bos_token_id=self.tokenizer.bos_token_id
                 )
                 
@@ -156,8 +180,7 @@ class SingleModelDecoding:
                     tokenizer=self.tokenizer,
                     pad_token_id=self.tokenizer.pad_token_id,
                     eos_token_id=2 if self.model_type == "opc" else self.tokenizer.eos_token_id,
-                    stop_strings=["\n"] if self.task == "repoeval_line" or self.task == "repoeval_line_prefix" else None,
-                    stopping_criteria=StoppingCriteriaList([PythonStatementStoppingCriteria(self.tokenizer, kwargs["prompt"], context_ids.shape[1], self.parser, self.NL_list)])
+                    stopping_criteria=stopping_criteria
                 )
             
             generated_tokens = outputs[0]

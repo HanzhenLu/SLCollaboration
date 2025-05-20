@@ -82,8 +82,8 @@ def format_example(args, tokenizer, example:Example):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--l_model_name_or_path",  type=str,default="/data/chuyangxu/lhz/model/Qwen/Qwen2.5-Coder-7B", help="Path to the large model.")
-    parser.add_argument("--s_model_name_or_path",  type=str,default="/data/chuyangxu/lhz/model/opc-sft-v1-modified", help="Path to the small model.")
+    parser.add_argument("--l_model_name_or_path",  type=str,default="/nasdata/Model/Qwen2.5-Coder-7B", help="Path to the large model.")
+    parser.add_argument("--s_model_name_or_path",  type=str,default="/data/hanzhenlu/model/opc-sft-v1-modified", help="Path to the small model.")
 
     parser.add_argument("--output_dir",  type=str, default='outputs', help="Path to save the generated outputs.")
     parser.add_argument("--lang", type=str, default="python", help="Programming language.")
@@ -156,16 +156,16 @@ def main():
 
     step = "step7-more"
     all_eval_examples = {
-        "ours": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours-5.pkl"),
-        "ours_suffix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_suffix-5.pkl"),
         "cceval": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/cceval-5.pkl"),
         "repoeval_line": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_line-5.pkl"),
         "repoeval_api": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_api-5.pkl"),
-        "ours_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_only_prefix-5.pkl"),
-        "ours_suffix_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_suffix_only_prefix-5.pkl"),
+        "ours": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours-5.pkl"),
         "cceval_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/cceval_only_prefix-5.pkl"),
         "repoeval_line_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_line_only_prefix-5.pkl"),
         "repoeval_api_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_api_only_prefix-5.pkl"),
+        "ours_suffix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_suffix-5.pkl"),
+        "ours_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_only_prefix-5.pkl"),
+        "ours_suffix_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_suffix_only_prefix-5.pkl"),
     }
     
     # for testing
