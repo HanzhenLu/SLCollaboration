@@ -102,7 +102,7 @@ class SingleModelDecoding:
     def set_task(self, task):
         self.task = task
         
-    def generate(self, prefix="", suffix="", relevent_str='', **kwargs):
+    def generate(self, prefix="", suffix="", relevant_str='', **kwargs):
         """生成代码
         Args:
             input_ids: 输入的token ids
@@ -112,16 +112,16 @@ class SingleModelDecoding:
         """
         # 构造完整上下文
         if self.model_type == "qwen":
-            context = f"{self.token_mapping['prefix']}{relevent_str}{prefix}{self.token_mapping['suffix']}{suffix}{self.token_mapping['middle']}"
+            context = f"{self.token_mapping['prefix']}{relevant_str}{prefix}{self.token_mapping['suffix']}{suffix}{self.token_mapping['middle']}"
             context_ids = self.tokenizer(context, return_tensors="pt").input_ids.to(self.device)
         elif self.model_type == "opc":
-            context = f"{self.token_mapping['suffix']}{suffix}{self.token_mapping['prefix']}{relevent_str}{prefix}{self.token_mapping['middle']}"
+            context = f"{self.token_mapping['suffix']}{suffix}{self.token_mapping['prefix']}{relevant_str}{prefix}{self.token_mapping['middle']}"
             context_ids = self.tokenizer(context, return_tensors="pt", add_special_tokens=False).input_ids.to(self.device)
         elif self.model_type == "deepseek":
-            context = f"{self.token_mapping['prefix']}{relevent_str}{prefix}{self.token_mapping['middle']}{suffix}{self.token_mapping['suffix']}"
+            context = f"{self.token_mapping['prefix']}{relevant_str}{prefix}{self.token_mapping['middle']}{suffix}{self.token_mapping['suffix']}"
             context_ids = self.tokenizer(context, return_tensors="pt").input_ids.to(self.device)
         elif self.model_type == "starcoder":
-            context = f"{self.token_mapping['prefix']}{relevent_str}{prefix}{self.token_mapping['suffix']}{suffix}{self.token_mapping['middle']}"
+            context = f"{self.token_mapping['prefix']}{relevant_str}{prefix}{self.token_mapping['suffix']}{suffix}{self.token_mapping['middle']}"
             context_ids = self.tokenizer(context, return_tensors="pt").input_ids.to(self.device)
         else:
             raise RuntimeError("Unsupported model")

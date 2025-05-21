@@ -3,7 +3,7 @@ import logging
 import torch
 from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from utils.util import load_dataset_from_path, relevent_contexts, Example, CodeBlock
+from utils.util import load_dataset_from_path, relevant_contexts, Example, CodeBlock
 from eval import compute_metric_stmt
 import time
 import json
@@ -40,7 +40,7 @@ def format_example(args, tokenizer, example:Example):
         else:
             small_relevant = example.small_relevant_codes
 
-    large_input, small_input = relevent_contexts(small_relevant[:args.relevant_code_num], example.relevant_codes[:args.relevant_code_num], \
+    large_input, small_input = relevant_contexts(small_relevant[:args.relevant_code_num], example.relevant_codes[:args.relevant_code_num], \
         tokenizer, cross_file_budget, small_repo_percent=args.repo_percent) #100% repo
     
     if args.large_model_type is None:
@@ -69,14 +69,10 @@ def format_example(args, tokenizer, example:Example):
         prefix_ids = prefix_tokenized_result["input_ids"][-prefix_length:]
         suffix_ids = suffix_tokenized_result["input_ids"][:suffix_length]
     
-    # 上下文检索的+根据小模型检索的，用于双模型解码模式
-    repo_str = tokenizer.decode(repo_input["input_ids"], skip_special_tokens=False)
+    repo_str = tokenizer.decode(repo_input["input_ids"], skip_special_tokens=True)
     
-    ### 只有根据上下文检索的,用于单一模型解码模式
-    # repo_str = tokenizer.decode(small_input["input_ids"], skip_special_tokens=False)  
-    
-    prefix_str = tokenizer.decode(prefix_ids,skip_special_tokens=True)
-    suffix_str = tokenizer.decode(suffix_ids,skip_special_tokens=True)
+    prefix_str = tokenizer.decode(prefix_ids, skip_special_tokens=True)
+    suffix_str = tokenizer.decode(suffix_ids, skip_special_tokens=True)
     return repo_str, prefix_str, suffix_str
 # --------------------------
 
@@ -154,17 +150,17 @@ def main():
     PY_LANGUAGE = Language(tspython.language())
     parser = Parser(PY_LANGUAGE)
 
-    step = "step7-more"
+    step = "step7"
     all_eval_examples = {
         "cceval": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/cceval-5.pkl"),
         "repoeval_line": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_line-5.pkl"),
         "repoeval_api": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_api-5.pkl"),
         "ours": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours-5.pkl"),
+        "ours_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_only_prefix-5.pkl"),
         "cceval_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/cceval_only_prefix-5.pkl"),
         "repoeval_line_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_line_only_prefix-5.pkl"),
         "repoeval_api_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_api_only_prefix-5.pkl"),
         "ours_suffix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_suffix-5.pkl"),
-        "ours_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_only_prefix-5.pkl"),
         "ours_suffix_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_suffix_only_prefix-5.pkl"),
     }
     
@@ -217,7 +213,7 @@ def main():
     for name,examples in tqdm(all_eval_examples.items(),desc="Formatting"):
         print(name)
         for example in examples:
-            example.relevent_str, example.prefix_str, example.suffix_str = format_example(args, l_tokenizer if args.large_model_type else s_tokenizer, example)
+            example.relevant_str, example.prefix_str, example.suffix_str = format_example(args, l_tokenizer if args.large_model_type else s_tokenizer, example)
             
     # 4. 初始化双模型解码器
     if args.one_model:
@@ -276,7 +272,7 @@ def main():
                     generated_code = decoder.generate(
                         prefix=example.prefix_str,
                         suffix=example.suffix_str,
-                        relevent_str=example.relevent_str,
+                        relevant_str=example.relevant_str,
                         ground_truth=example.middle,
                         prompt=example.prefix
                     )
@@ -284,7 +280,7 @@ def main():
                     generated_code = decoder.generate(
                         prefix=example.prefix_str,
                         suffix=example.suffix_str,
-                        relevent_str=example.relevent_str,
+                        relevant_str=example.relevant_str,
                         ground_truth=example.middle,
                         trigger_point_idx=example.trigger_point_idx if args.trigger else None,
                         prompt=example.prefix,

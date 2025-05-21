@@ -309,7 +309,7 @@ def cross_file_contexts(related_codes:List[CodeBlock], tokenizer:PreTrainedToken
     
     return repo_content
 
-def relevent_contexts(small_related_code:List[CodeBlock], repo_related_codes:List[CodeBlock], tokenizer:PreTrainedTokenizer, cross_file_budget:int, small_repo_percent:float=0.8) -> Dict[str, List[int]]:
+def relevant_contexts(small_related_code:List[CodeBlock], repo_related_codes:List[CodeBlock], tokenizer:PreTrainedTokenizer, cross_file_budget:int, small_repo_percent:float=0.8) -> Dict[str, List[int]]:
     filter_small_codeblocks = []
     for x in small_related_code:
         file_path = x.file_path

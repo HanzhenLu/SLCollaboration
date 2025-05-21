@@ -13,18 +13,48 @@ class PythonStatementStoppingCriteria(StoppingCriteria):
         self.NL_list = NL_list
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
-        # 检查是否出现换行
-        if not input_ids[0][-1].detach().cpu().numpy() in self.NL_list:
-            return False
+        for seq in input_ids:
+            # 获取新生成的部分（不包含 prompt）
+            generated_ids = seq[self.input_ids_len:]
+            new_text:str = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+            
+            # 至少要生成出一行末才会被接受
+            if "\n" not in new_text:
+                return False
+            
+            code = self.prompt
+            new_text_lines = new_text.splitlines(keepends=True)
+            parse_valid = False
+            for line in new_text_lines:
+                code = code + line
+                if is_parse_valid(self.parser, code):
+                    parse_valid = True
+                    break
+            
+            # 说明这一支仍然没生成出能被正确解析的语句，需要继续生成
+            if not parse_valid:
+                return False
         
-        # 获取新生成的部分（不包含 prompt）
-        generated_ids = input_ids[0, self.input_ids_len:]
-        new_text = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+        # 如果从循环中退出，说明所有分支都已经有了能够被正确解析的语句，可以结束生成了
+        return True
+        
+class PythonLineStoppingCriteria(StoppingCriteria):
+    def __init__(self, tokenizer, input_ids_len):
+        self.tokenizer = tokenizer
+        self.input_ids_len = input_ids_len  # 原始 prompt 的 token 长度
 
-        if is_parse_valid(self.parser, self.prompt + new_text):
-            return True  # 满足停止条件
-        else:
-            return False  # 继续生成
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
+        for seq in input_ids:
+            # 获取新生成的部分（不包含 prompt）
+            generated_ids = seq[self.input_ids_len:]
+            new_text:str = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+            
+            # 至少要生成出一行末才会被接受
+            if "\n" not in new_text:
+                return False
+        
+        # 如果从循环中退出，说明所有分支都已经生成了至少一行，可以结束生成了
+        return True     
 
 class SPDecoding:
     def __init__(self, model, model_type, tokenizer, device, lang, parser, without_sp=False):
@@ -36,7 +66,7 @@ class SPDecoding:
         self.without_sp = without_sp
         
         self.parser = parser
-        self.task=None
+        self.task = None
         self.token_mapping = {}
         if 'qwen' == model_type:
             self.token_mapping["prefix"] = "<|fim_prefix|>"
@@ -61,8 +91,8 @@ class SPDecoding:
         """生成代码"""
         small_output = kwargs["small_output"]
         
-        if kwargs["correct"]:
-            return small_output, None
+        # if kwargs["correct"]:
+        #     return small_output, None
         
         if trigger_point_idx is not None:
             trigger_str = ground_truth[:trigger_point_idx]
@@ -105,8 +135,13 @@ class SPDecoding:
                 
                 # 保留匹配部分的小模型输出
                 # Fix tensor concatenation syntax
-                large_input_ids = torch.cat([origin_large_input_ids, small_output_tokens[:mismatch_pos].unsqueeze(0)], dim=1)
+                if mismatch_pos > 0:
+                    large_input_ids = torch.cat([origin_large_input_ids, small_output_tokens[:mismatch_pos].unsqueeze(0)], dim=1)
+                else:
+                    large_input_ids = origin_large_input_ids
                 max_new_tokens = 64 - mismatch_pos
+                if max_new_tokens <= 0:
+                    max_new_tokens = 1
 
             elif flag=='Not_veri':
                 large_input_ids = origin_large_input_ids
@@ -125,6 +160,11 @@ class SPDecoding:
             # Create attention mask (all 1s since we're not padding)
             attention_mask = torch.ones_like(large_input_ids).to(self.device)
             
+            if self.task == "repoeval_line" or self.task == "repoeval_line_prefix":
+                stopping_criteria = StoppingCriteriaList([PythonLineStoppingCriteria(self.tokenizer, large_input_ids.shape[1])])
+            else:
+                stopping_criteria = StoppingCriteriaList([PythonStatementStoppingCriteria(self.tokenizer, kwargs["prompt"], large_input_ids.shape[1], self.parser, self.NL_list)])
+            
             outputs = self.model.generate(
                 large_input_ids,
                 attention_mask=attention_mask,  # Add attention mask
@@ -133,8 +173,7 @@ class SPDecoding:
                 eos_token_id=self.tokenizer.eos_token_id,
                 do_sample=False,
                 tokenizer=self.tokenizer,
-                stop_strings=["\n"] if self.task == "repoeval_line" or self.task == "repoeval_line_prefix" else None,
-                stopping_criteria=StoppingCriteriaList([PythonStatementStoppingCriteria(self.tokenizer, kwargs["prompt"], large_input_ids.shape[1], self.parser, self.NL_list)])
+                stopping_criteria=stopping_criteria
             )
             generated_tokens = outputs[0]
             input_tokens = large_input_ids[0]
