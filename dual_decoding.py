@@ -4,6 +4,32 @@ from typing import List
 from transformers import StoppingCriteria, StoppingCriteriaList
 from utils.eval_util import is_parse_valid
 
+@profile
+def greedy_generate(model, tokenizer, input_ids, max_new_tokens, past_key_values, stopping_criteria):
+    model.eval()
+
+    generated = input_ids.clone()
+    next_token = input_ids
+    eos_token_id = tokenizer.eos_token_id
+
+    for _ in range(max_new_tokens - 1):
+        with torch.no_grad():
+            # 只输入上一个 token，同时传入 past_key_values
+            outputs = model(next_token, use_cache=True, past_key_values=past_key_values)
+            next_token_logits = outputs.logits[:, -1, :]
+            past_key_values = outputs.past_key_values
+
+            # 贪婪选择
+            next_token = torch.argmax(next_token_logits, dim=-1).unsqueeze(-1)
+            generated = torch.cat([generated, next_token], dim=-1)
+
+            # 停止条件
+            if next_token.item() == eos_token_id or stopping_criteria(generated, next_token_logits):
+                break
+
+    return tokenizer.decode(generated[0], skip_special_tokens=True)
+
+
 class PythonStatementStoppingCriteria(StoppingCriteria):
     def __init__(self, tokenizer, prompt, input_ids_len, parser, NL_list:List[int]):
         self.tokenizer = tokenizer
@@ -120,28 +146,37 @@ class SPDecoding:
         
         with torch.no_grad():
             if flag == 'verified':
-                outputs = self.model(large_input_ids)
-                logits = outputs.logits
-                small_end_index = small_output_index + len(small_output_tokens)
-
-                # 获取每个位置的预测token
-                pred_tokens = torch.argmax(logits[0, small_output_index-1:small_end_index-1], dim=-1)
-                
-                mismatch = (pred_tokens != small_output_tokens).nonzero(as_tuple=True)
-                if mismatch[0].numel() > 0:
-                    mismatch_pos = mismatch[0][0].item()
-                else:
-                    mismatch_pos = len(small_output_tokens)
-                
-                # 保留匹配部分的小模型输出
-                # Fix tensor concatenation syntax
-                if mismatch_pos > 0:
-                    large_input_ids = torch.cat([origin_large_input_ids, small_output_tokens[:mismatch_pos].unsqueeze(0)], dim=1)
-                else:
+                if len(small_output_tokens) == 0:
                     large_input_ids = origin_large_input_ids
-                max_new_tokens = 64 - mismatch_pos
-                if max_new_tokens <= 0:
-                    max_new_tokens = 1
+                    mismatch_pos = "NotValidate"
+                    max_new_tokens = 64
+                    flag = "Not_veri"
+                else:
+                    outputs = self.model(large_input_ids, use_cache=True)
+                    logits = outputs.logits
+                    kv_cache = outputs.past_key_values
+                    small_end_index = small_output_index + len(small_output_tokens)
+
+                    # 获取每个位置的预测token
+                    pred_tokens = torch.argmax(logits[0, small_output_index-1:small_end_index], dim=-1)
+                    
+                    mismatch = (pred_tokens[:-1] != small_output_tokens).nonzero(as_tuple=True)
+                    if mismatch[0].numel() > 0:
+                        mismatch_pos = mismatch[0][0].item()
+                        large_input_ids = pred_tokens[mismatch_pos:mismatch_pos+1].unsqueeze(0)
+                        kv_cache = [
+                            (k[:, :, :len(origin_large_input_ids[0]) + mismatch_pos], v[:, :, :len(origin_large_input_ids[0]) + mismatch_pos]) for k, v in kv_cache
+                        ]
+                    else:
+                        mismatch_pos = len(small_output_tokens)
+                        kv_cache = [
+                            (k[:, :, :len(large_input_ids[0])], v[:, :, :len(large_input_ids[0])]) for k, v in kv_cache
+                        ]
+                        large_input_ids = pred_tokens[-1:].unsqueeze(0)
+                    
+                    max_new_tokens = 64 - mismatch_pos
+                    if max_new_tokens <= 0:
+                        max_new_tokens = 1
 
             elif flag=='Not_veri':
                 large_input_ids = origin_large_input_ids
@@ -154,43 +189,45 @@ class SPDecoding:
             else:
                 raise Exception
             
-            # if len(input_ids.shape) == 3:
-            #     input_ids = input_ids.squeeze(0)  # Add batch dimension
-
-            # Create attention mask (all 1s since we're not padding)
-            attention_mask = torch.ones_like(large_input_ids).to(self.device)
-            
-            if self.task == "repoeval_line" or self.task == "repoeval_line_prefix":
-                stopping_criteria = StoppingCriteriaList([PythonLineStoppingCriteria(self.tokenizer, large_input_ids.shape[1])])
+            if flag == "verified":
+                valid_small_output = self.tokenizer.decode(small_output_tokens[:mismatch_pos], skip_special_tokens=True)
+                
+                if self.task == "repoeval_line" or self.task == "repoeval_line_prefix":
+                    stopping_criteria = StoppingCriteriaList([PythonLineStoppingCriteria(self.tokenizer, 0)])
+                else:
+                    prompt = kwargs["prompt"] + valid_small_output
+                    stopping_criteria = StoppingCriteriaList([PythonStatementStoppingCriteria(self.tokenizer, prompt, 0, self.parser, self.NL_list)])
+                
+                if large_input_ids.item() == self.tokenizer.eos_token_id or stopping_criteria(large_input_ids, None):
+                    new_text = self.tokenizer.decode(large_input_ids[0], skip_special_tokens=True)
+                else:
+                    new_text = greedy_generate(self.model, self.tokenizer, large_input_ids, max_new_tokens, kv_cache, stopping_criteria)
+                final_output = valid_small_output + new_text
             else:
-                stopping_criteria = StoppingCriteriaList([PythonStatementStoppingCriteria(self.tokenizer, kwargs["prompt"], large_input_ids.shape[1], self.parser, self.NL_list)])
-            
-            outputs = self.model.generate(
-                large_input_ids,
-                attention_mask=attention_mask,  # Add attention mask
-                max_new_tokens=max_new_tokens,
-                pad_token_id=self.tokenizer.pad_token_id,
-                eos_token_id=self.tokenizer.eos_token_id,
-                do_sample=False,
-                tokenizer=self.tokenizer,
-                stopping_criteria=stopping_criteria
-            )
-            generated_tokens = outputs[0]
-            input_tokens = large_input_ids[0]
+                if self.task == "repoeval_line" or self.task == "repoeval_line_prefix":
+                    stopping_criteria = StoppingCriteriaList([PythonLineStoppingCriteria(self.tokenizer, large_input_ids.shape[1])])
+                else:
+                    stopping_criteria = StoppingCriteriaList([PythonStatementStoppingCriteria(self.tokenizer, kwargs["prompt"], large_input_ids.shape[1], self.parser, self.NL_list)])
+                
+                attention_mask = torch.ones_like(large_input_ids).to(self.device)
+                outputs = self.model.generate(
+                    large_input_ids,
+                    attention_mask=attention_mask,  # Add attention mask
+                    max_new_tokens=max_new_tokens,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                    eos_token_id=self.tokenizer.eos_token_id,
+                    do_sample=False,
+                    tokenizer=self.tokenizer,
+                    stopping_criteria=stopping_criteria
+                )
+                generated_tokens = outputs[0]
+                input_tokens = large_input_ids[0]
 
-            # 找到生成文本与输入文本的起始位置
-            new_tokens = generated_tokens[len(input_tokens):]
+                # 找到生成文本与输入文本的起始位置
+                new_tokens = generated_tokens[len(input_tokens):]
 
-            # 使用 tokenizer 只对新的 token 进行解码
-            new_text = self.tokenizer.decode(new_tokens, skip_special_tokens=True)
-
-        # torch.cuda.empty_cache()
-        # print("large_output:",large_output)
-        # 组合最终结果
-        if mismatch_pos in ['NotValidate', 'Trigger']:
-            final_output =  new_text
-        else:
-            final_output = self.tokenizer.decode(small_output_tokens[:mismatch_pos]) + new_text
-        
+                # 使用 tokenizer 只对新的 token 进行解码
+                new_text = self.tokenizer.decode(new_tokens, skip_special_tokens=True)
+                final_output =  new_text
 
         return final_output

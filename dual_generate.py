@@ -156,11 +156,11 @@ def main():
         "repoeval_line": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_line-5.pkl"),
         "repoeval_api": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_api-5.pkl"),
         "ours": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours-5.pkl"),
-        "ours_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_only_prefix-5.pkl"),
+        "ours_suffix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_suffix-5.pkl"),
         "cceval_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/cceval_only_prefix-5.pkl"),
         "repoeval_line_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_line_only_prefix-5.pkl"),
         "repoeval_api_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_api_only_prefix-5.pkl"),
-        "ours_suffix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_suffix-5.pkl"),
+        "ours_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_only_prefix-5.pkl"),
         "ours_suffix_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_suffix_only_prefix-5.pkl"),
     }
     
@@ -201,9 +201,9 @@ def main():
     #         small_relevant_local_stmts=small_relevant_local_stmts
     #     )
 
-    # bn = "repoeval_api"
+    # bn = "ours"
     # examples = []
-    # with open(f"preprocessed_retrieval_twice/step7-more/{bn}-5.jsonl", 'r') as f:
+    # with open(f"preprocessed_retrieval_twice/step7/{bn}-5.jsonl", 'r') as f:
     #     for line in f:
     #         example_dict = json.loads(line)
     #         examples.append(dict_to_example(example_dict))
@@ -253,7 +253,6 @@ def main():
     # 创建时间统计字典和结果目录
     time_stats = {}
     os.makedirs(args.output_dir, exist_ok=True)
-    flash = 5
    
     for key, examples in tqdm(all_eval_examples.items(), desc="Generating"):
         if decoder.task != key:
@@ -303,12 +302,12 @@ def main():
                 })
                 i += 1
                 # del generated_code
-                if i % flash == 0:
+                # if i % flash == 0:
                     # logger.info(f"Empty GPU memory")
-                    torch.cuda.empty_cache()  
-                    gc.collect()
-            torch.cuda.empty_cache()  
-            gc.collect()        
+            #         torch.cuda.empty_cache()  
+            #         gc.collect()
+            # torch.cuda.empty_cache()  
+            # gc.collect()        
 
             total_time = sum(result["time"] for result in results)
             avg_time_per_sample = total_time / len(results)
