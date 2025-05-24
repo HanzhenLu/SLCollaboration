@@ -13,30 +13,45 @@ class PythonStatementStoppingCriteria(StoppingCriteria):
         self.NL_list = NL_list
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
-        for seq in input_ids:
-            # 获取新生成的部分（不包含 prompt）
-            generated_ids = seq[self.input_ids_len:]
-            new_text:str = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+        if input_ids.shape[0] > 1:
+            for seq in input_ids:
+                # 获取新生成的部分（不包含 prompt）
+                generated_ids = seq[self.input_ids_len:]
+                new_text:str = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+                
+                # 至少要生成出一行末才会被接受
+                if "\n" not in new_text:
+                    return False
+                
+                code = self.prompt
+                new_text_lines = new_text.splitlines(keepends=True)
+                parse_valid = False
+                for line in new_text_lines:
+                    code = code + line
+                    if is_parse_valid(self.parser, code):
+                        parse_valid = True
+                        break
+                
+                # 说明这一支仍然没生成出能被正确解析的语句，需要继续生成
+                if not parse_valid:
+                    return False
             
-            # 至少要生成出一行末才会被接受
-            if "\n" not in new_text:
-                return False
-            
-            code = self.prompt
-            new_text_lines = new_text.splitlines(keepends=True)
-            parse_valid = False
-            for line in new_text_lines:
-                code = code + line
-                if is_parse_valid(self.parser, code):
-                    parse_valid = True
-                    break
-            
-            # 说明这一支仍然没生成出能被正确解析的语句，需要继续生成
-            if not parse_valid:
-                return False
+            # 如果从循环中退出，说明所有分支都已经有了能够被正确解析的语句，可以结束生成了
+            return True
         
-        # 如果从循环中退出，说明所有分支都已经有了能够被正确解析的语句，可以结束生成了
-        return True
+        else:
+            # 检查是否出现换行
+            if not input_ids[0][-1].detach().cpu().numpy() in self.NL_list:
+                return False
+            
+            # 获取新生成的部分（不包含 prompt）
+            generated_ids = input_ids[0, self.input_ids_len:]
+            new_text = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+
+            if is_parse_valid(self.parser, self.prompt + new_text):
+                return True  # 满足停止条件
+            else:
+                return False  # 继续生成
         
 class PythonLineStoppingCriteria(StoppingCriteria):
     def __init__(self, tokenizer, input_ids_len):
@@ -44,23 +59,31 @@ class PythonLineStoppingCriteria(StoppingCriteria):
         self.input_ids_len = input_ids_len  # 原始 prompt 的 token 长度
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
-        for seq in input_ids:
-            # 获取新生成的部分（不包含 prompt）
-            generated_ids = seq[self.input_ids_len:]
-            new_text:str = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+        if input_ids.shape[0] > 1:
+            for seq in input_ids:
+                # 获取新生成的部分（不包含 prompt）
+                generated_ids = seq[self.input_ids_len:]
+                new_text:str = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+                
+                # 至少要生成出一行末才会被接受
+                if "\n" not in new_text:
+                    return False
             
-            # 至少要生成出一行末才会被接受
-            if "\n" not in new_text:
+            # 如果从循环中退出，说明所有分支都已经生成了至少一行，可以结束生成了
+            return True        
+        else:
+            # 检查是否出现换行
+            if not input_ids[0][-1].detach().cpu().numpy() in self.NL_list:
                 return False
-        
-        # 如果从循环中退出，说明所有分支都已经生成了至少一行，可以结束生成了
-        return True        
+            
+            return True
         
 class SingleModelDecoding:
-    def __init__(self, model, model_type, tokenizer, device, lang, parser, twice=False):
+    def __init__(self, model, model_type, tokenizer, max_new_tokens, device, lang, parser, twice=False):
         self.model = model
         self.model_type = model_type
         self.tokenizer = tokenizer
+        self.max_new_tokens = max_new_tokens
         self.device = device
         self.lang = lang
         self.parser=parser
@@ -140,7 +163,7 @@ class SingleModelDecoding:
                     num_beams=2,
                     num_return_sequences=2,
                     do_sample=False,
-                    max_new_tokens=64,
+                    max_new_tokens=self.max_new_tokens,
                     pad_token_id=self.tokenizer.pad_token_id,
                     eos_token_id=2 if self.model_type == "opc" else self.tokenizer.eos_token_id
                 )
@@ -176,7 +199,7 @@ class SingleModelDecoding:
                     attention_mask=attention_mask,
                     do_sample=False,
                     # generation_config=generate_config,
-                    max_new_tokens=64,
+                    max_new_tokens=self.max_new_tokens,
                     tokenizer=self.tokenizer,
                     pad_token_id=self.tokenizer.pad_token_id,
                     eos_token_id=2 if self.model_type == "opc" else self.tokenizer.eos_token_id,

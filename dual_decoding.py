@@ -83,10 +83,11 @@ class PythonLineStoppingCriteria(StoppingCriteria):
         return True     
 
 class SPDecoding:
-    def __init__(self, model, model_type, tokenizer, device, lang, parser, without_sp=False):
+    def __init__(self, model, model_type, tokenizer, max_new_tokens, device, lang, parser, without_sp=False):
         self.model = model
         self.model_type = model_type
         self.tokenizer = tokenizer
+        self.max_new_tokens = max_new_tokens
         self.device = device
         self.lang = lang
         self.without_sp = without_sp
@@ -149,7 +150,7 @@ class SPDecoding:
                 if len(small_output_tokens) == 0:
                     large_input_ids = origin_large_input_ids
                     mismatch_pos = "NotValidate"
-                    max_new_tokens = 64
+                    max_new_tokens = self.max_new_tokens
                     flag = "Not_veri"
                 else:
                     outputs = self.model(large_input_ids, use_cache=True)
@@ -174,18 +175,18 @@ class SPDecoding:
                         ]
                         large_input_ids = pred_tokens[-1:].unsqueeze(0)
                     
-                    max_new_tokens = 64 - mismatch_pos
+                    max_new_tokens = self.max_new_tokens - mismatch_pos
                     if max_new_tokens <= 0:
                         max_new_tokens = 1
 
             elif flag=='Not_veri':
                 large_input_ids = origin_large_input_ids
                 mismatch_pos = "NotValidate"
-                max_new_tokens = 64
+                max_new_tokens = self.max_new_tokens
             
             elif flag=='trigger':
                 mismatch_pos = "Trigger"
-                max_new_tokens = 64
+                max_new_tokens = self.max_new_tokens
             else:
                 raise Exception
             

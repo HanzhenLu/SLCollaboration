@@ -9,8 +9,6 @@ import time
 import json
 import os
 from datetime import datetime
-# gc
-import gc
 from single_decoding import SingleModelDecoding
 from dual_decoding import SPDecoding 
 from tree_sitter import Language, Parser
@@ -85,6 +83,7 @@ def main():
     parser.add_argument("--lang", type=str, default="python", help="Programming language.")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device to use (cuda or cpu).")
     parser.add_argument("--max_input_length", type=int, default=2048, help="Maximum generation length.")
+    parser.add_argument("--max_new_tokens", type=int, default=64)
     parser.add_argument("--stmts",action="store_true")
     parser.add_argument("--repo_percent",type=float,required=True)
     parser.add_argument("--trigger", action="store_true", help="larger model use trigger")
@@ -222,6 +221,7 @@ def main():
                 model=l_model,
                 model_type=args.large_model_type, # e.g., 'deepseek', 'qwen'
                 tokenizer=l_tokenizer,
+                max_new_tokens=args.max_new_tokens,
                 device=args.device,
                 lang=args.lang,
                 parser=parser,
@@ -232,6 +232,7 @@ def main():
                 model=s_model,
                 model_type="opc", # e.g., 'deepseek', 'qwen'
                 tokenizer=s_tokenizer,
+                max_new_tokens=args.max_new_tokens,
                 device=args.device,
                 lang=args.lang,
                 parser=parser,
@@ -244,6 +245,7 @@ def main():
             model=l_model,
             model_type=args.large_model_type, # e.g., 'deepseek', 'qwen'
             tokenizer=l_tokenizer,
+            max_new_tokens=args.max_new_tokens,
             device=args.device,
             lang=args.lang,
             parser=parser,
