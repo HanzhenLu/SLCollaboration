@@ -54,9 +54,10 @@ class PythonStatementStoppingCriteria(StoppingCriteria):
                 return False  # 继续生成
         
 class PythonLineStoppingCriteria(StoppingCriteria):
-    def __init__(self, tokenizer, input_ids_len):
+    def __init__(self, tokenizer, input_ids_len, NL_list:List[int]):
         self.tokenizer = tokenizer
         self.input_ids_len = input_ids_len  # 原始 prompt 的 token 长度
+        self.NL_list = NL_list
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
         if input_ids.shape[0] > 1:
@@ -153,7 +154,7 @@ class SingleModelDecoding:
         # 生成
         with torch.no_grad():
             if self.task == "repoeval_line" or self.task == "repoeval_line_prefix":
-                stopping_criteria = StoppingCriteriaList([PythonLineStoppingCriteria(self.tokenizer, context_ids.shape[1])])
+                stopping_criteria = StoppingCriteriaList([PythonLineStoppingCriteria(self.tokenizer, context_ids.shape[1], self.NL_list)])
             else:
                 stopping_criteria = StoppingCriteriaList([PythonStatementStoppingCriteria(self.tokenizer, kwargs["prompt"], context_ids.shape[1], self.parser, self.NL_list)])
             
