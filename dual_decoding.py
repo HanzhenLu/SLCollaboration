@@ -39,48 +39,71 @@ class PythonStatementStoppingCriteria(StoppingCriteria):
         self.NL_list = NL_list
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
-        for seq in input_ids:
-            # 获取新生成的部分（不包含 prompt）
-            generated_ids = seq[self.input_ids_len:]
-            new_text:str = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+        if input_ids.shape[0] > 1:
+            for seq in input_ids:
+                # 获取新生成的部分（不包含 prompt）
+                generated_ids = seq[self.input_ids_len:]
+                new_text:str = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+                
+                # 至少要生成出一行末才会被接受
+                if "\n" not in new_text:
+                    return False
+                
+                code = self.prompt
+                new_text_lines = new_text.splitlines(keepends=True)
+                parse_valid = False
+                for line in new_text_lines:
+                    code = code + line
+                    if is_parse_valid(self.parser, code):
+                        parse_valid = True
+                        break
+                
+                # 说明这一支仍然没生成出能被正确解析的语句，需要继续生成
+                if not parse_valid:
+                    return False
             
-            # 至少要生成出一行末才会被接受
-            if "\n" not in new_text:
-                return False
-            
-            code = self.prompt
-            new_text_lines = new_text.splitlines(keepends=True)
-            parse_valid = False
-            for line in new_text_lines:
-                code = code + line
-                if is_parse_valid(self.parser, code):
-                    parse_valid = True
-                    break
-            
-            # 说明这一支仍然没生成出能被正确解析的语句，需要继续生成
-            if not parse_valid:
-                return False
+            # 如果从循环中退出，说明所有分支都已经有了能够被正确解析的语句，可以结束生成了
+            return True
         
-        # 如果从循环中退出，说明所有分支都已经有了能够被正确解析的语句，可以结束生成了
-        return True
+        else:
+            # 检查是否出现换行
+            if not input_ids[0][-1].detach().cpu().numpy() in self.NL_list:
+                return False
+            
+            # 获取新生成的部分（不包含 prompt）
+            generated_ids = input_ids[0, self.input_ids_len:]
+            new_text = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+
+            if is_parse_valid(self.parser, self.prompt + new_text):
+                return True  # 满足停止条件
+            else:
+                return False  # 继续生成
         
 class PythonLineStoppingCriteria(StoppingCriteria):
-    def __init__(self, tokenizer, input_ids_len):
+    def __init__(self, tokenizer, input_ids_len, NL_list:List[int]):
         self.tokenizer = tokenizer
         self.input_ids_len = input_ids_len  # 原始 prompt 的 token 长度
+        self.NL_list = NL_list
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
-        for seq in input_ids:
-            # 获取新生成的部分（不包含 prompt）
-            generated_ids = seq[self.input_ids_len:]
-            new_text:str = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+        if input_ids.shape[0] > 1:
+            for seq in input_ids:
+                # 获取新生成的部分（不包含 prompt）
+                generated_ids = seq[self.input_ids_len:]
+                new_text:str = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+                
+                # 至少要生成出一行末才会被接受
+                if "\n" not in new_text:
+                    return False
             
-            # 至少要生成出一行末才会被接受
-            if "\n" not in new_text:
+            # 如果从循环中退出，说明所有分支都已经生成了至少一行，可以结束生成了
+            return True        
+        else:
+            # 检查是否出现换行
+            if not input_ids[0][-1].detach().cpu().numpy() in self.NL_list:
                 return False
-        
-        # 如果从循环中退出，说明所有分支都已经生成了至少一行，可以结束生成了
-        return True     
+            
+            return True
 
 class SPDecoding:
     def __init__(self, model, model_type, tokenizer, max_new_tokens, device, lang, parser, without_sp=False):
@@ -107,6 +130,12 @@ class SPDecoding:
             self.token_mapping["prefix"] = "<fim_prefix>"
             self.token_mapping["middle"] = "<fim_middle>"
             self.token_mapping["suffix"] = "<fim_suffix>"
+        elif "opc" == model_type:
+            self.token_mapping["prefix"] = "<PREFIX>"
+            self.token_mapping["middle"] = "<MIDDLE>"
+            self.token_mapping["suffix"] = "<SUFFIX>"
+            self.tokenizer.eos_token_id = 2
+            self.tokenizer.eos_token = "<EOS>"
 
         self.NL_list = [id for _, id in tokenizer.vocab.items() if tokenizer.decode(id).endswith("\n")]
         
@@ -136,11 +165,18 @@ class SPDecoding:
         elif self.model_type == "deepseek":
             context = f"{self.token_mapping['prefix']}{relevant_str}{prefix}{self.token_mapping['middle']}{suffix}{self.token_mapping['suffix']}{small_output}"
             origin_context = f"{self.token_mapping['prefix']}{relevant_str}{prefix}{self.token_mapping['middle']}{suffix}{self.token_mapping['suffix']}"
+        elif self.model_type == "opc":
+            context = f"{self.token_mapping['suffix']}{suffix}{self.token_mapping['prefix']}{relevant_str}{prefix}{self.token_mapping['middle']}{small_output}"
+            origin_context = f"{self.token_mapping['suffix']}{suffix}{self.token_mapping['prefix']}{relevant_str}{prefix}{self.token_mapping['middle']}"
         else:
             raise RuntimeError(f"Unsupported model_type: {self.model_type}")
 
-        large_input_ids = self.tokenizer(context, return_tensors="pt").input_ids.to(self.device)
-        origin_large_input_ids = self.tokenizer(origin_context, return_tensors="pt").input_ids.to(self.device)
+        if self.model_type == "opc":
+            large_input_ids = self.tokenizer(context, return_tensors="pt", add_special_tokens=False).input_ids.to(self.device)
+            origin_large_input_ids = self.tokenizer(origin_context, return_tensors="pt", add_special_tokens=False).input_ids.to(self.device)
+        else:
+            large_input_ids = self.tokenizer(context, return_tensors="pt").input_ids.to(self.device)
+            origin_large_input_ids = self.tokenizer(origin_context, return_tensors="pt").input_ids.to(self.device)
 
         small_output_tokens = self.tokenizer(small_output, return_tensors="pt", add_special_tokens=False).input_ids.to(self.device)[0]
         small_output_index = origin_large_input_ids.shape[1]
@@ -194,7 +230,7 @@ class SPDecoding:
                 valid_small_output = self.tokenizer.decode(small_output_tokens[:mismatch_pos], skip_special_tokens=True)
                 
                 if self.task == "repoeval_line" or self.task == "repoeval_line_prefix":
-                    stopping_criteria = StoppingCriteriaList([PythonLineStoppingCriteria(self.tokenizer, 0)])
+                    stopping_criteria = StoppingCriteriaList([PythonLineStoppingCriteria(self.tokenizer, 0, self.NL_list)])
                 else:
                     prompt = kwargs["prompt"] + valid_small_output
                     stopping_criteria = StoppingCriteriaList([PythonStatementStoppingCriteria(self.tokenizer, prompt, 0, self.parser, self.NL_list)])
@@ -206,7 +242,7 @@ class SPDecoding:
                 final_output = valid_small_output + new_text
             else:
                 if self.task == "repoeval_line" or self.task == "repoeval_line_prefix":
-                    stopping_criteria = StoppingCriteriaList([PythonLineStoppingCriteria(self.tokenizer, large_input_ids.shape[1])])
+                    stopping_criteria = StoppingCriteriaList([PythonLineStoppingCriteria(self.tokenizer, large_input_ids.shape[1], self.NL_list)])
                 else:
                     stopping_criteria = StoppingCriteriaList([PythonStatementStoppingCriteria(self.tokenizer, kwargs["prompt"], large_input_ids.shape[1], self.parser, self.NL_list)])
                 
@@ -216,7 +252,7 @@ class SPDecoding:
                     attention_mask=attention_mask,  # Add attention mask
                     max_new_tokens=max_new_tokens,
                     pad_token_id=self.tokenizer.pad_token_id,
-                    eos_token_id=self.tokenizer.eos_token_id,
+                    eos_token_id=2 if self.model_type == "opc" else self.tokenizer.eos_token_id,
                     do_sample=False,
                     tokenizer=self.tokenizer,
                     stopping_criteria=stopping_criteria

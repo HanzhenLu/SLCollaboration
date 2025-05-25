@@ -16,6 +16,49 @@ import tree_sitter_python as tspython
 
 logger = logging.getLogger(__name__)
 
+def get_draft_from_file(lines: list[str], current_line_index: int):
+    if current_line_index == 0:
+        return None, None  # 没有上一行
+
+    find = False
+    for i, line in enumerate(lines[::-1]):
+        if line.strip():
+            target_line = line
+            if '"""' in target_line or "'''" in target_line:
+                return None, None
+            former_lines = lines[:-i-1]
+            find = True
+            break
+    
+    if not find:
+        return None, None
+    
+    for i in range(len(former_lines) - 1, -1, -1):
+        if target_line.endswith("\n"):
+            if former_lines[i].strip() == target_line.strip():
+                return lines[i + 1].rstrip('\n'), target_line
+        else:
+            if former_lines[i].rstrip().startswith(target_line.rstrip()):
+                start_position = lines[i].rstrip('\n').find(target_line.strip())
+                return lines[i].rstrip('\n')[start_position+len(target_line.strip()):], target_line
+
+    return None, target_line
+
+def get_draft_from_codeblock(codeblock, target_line):
+    for cb in codeblock:
+        lines = cb.code_content.splitlines(keepends=True)
+        if target_line.endswith("\n"):
+            for i, line in enumerate(lines):
+                if line.rstrip() == target_line.rstrip():
+                    if i != len(lines) - 1:
+                        return lines[i + 1]
+        else:
+            for i, line in enumerate(lines):
+                if line.rstrip().startswith(target_line.rstrip()):
+                    if i != len(lines) - 1:
+                        return lines[i + 1]
+    return None
+
 def format_example(args, tokenizer, example:Example):
     prefix = example.prefix
     suffix = example.suffix
@@ -91,8 +134,9 @@ def main():
     parser.add_argument("--one_model", action="store_true")
     parser.add_argument("--twice", action="store_true")
     parser.add_argument("--without_sp", action="store_true")
-    parser.add_argument("--large_model_type", default=None, choices=["qwen", "starcoder", "deepseek", None])
+    parser.add_argument("--large_model_type", default=None, choices=["qwen", "starcoder", "deepseek", "opc", None])
     parser.add_argument("--relevant_code_num", default=5, type=int)
+    parser.add_argument("--retrieve_draft", action="store_true")
     
 
     args = parser.parse_args()
@@ -131,19 +175,9 @@ def main():
         l_model = AutoModelForCausalLM.from_pretrained(args.l_model_name_or_path,torch_dtype=torch.float16).to(args.device)
         l_model.eval()
         logger.info("Large model loaded.")
-
-        # 2. 加载小模型和 Tokenizer
-        logger.info(f"Loading small model from {args.s_model_name_or_path}")
-        s_tokenizer = AutoTokenizer.from_pretrained(args.s_model_name_or_path)
-        s_model = AutoModelForCausalLM.from_pretrained(args.s_model_name_or_path).to(args.device)
-        s_model.eval()
-        logger.info("Small model loaded.")
         
         if l_tokenizer.pad_token is None:
             l_tokenizer.pad_token = l_tokenizer.eos_token
-        
-        if s_tokenizer.pad_token is None:
-            s_tokenizer.pad_token = s_tokenizer.eos_token
     
     ## 加载parser
     PY_LANGUAGE = Language(tspython.language())
@@ -151,16 +185,16 @@ def main():
 
     step = "step7"
     all_eval_examples = {
-        "cceval": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/cceval-5.pkl"),
-        "repoeval_line": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_line-5.pkl"),
-        "repoeval_api": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_api-5.pkl"),
-        "ours": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours-5.pkl"),
-        "ours_suffix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_suffix-5.pkl"),
-        "cceval_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/cceval_only_prefix-5.pkl"),
+        # "cceval": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/cceval-5.pkl"),
+        # "repoeval_line": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_line-5.pkl"),
+        # "repoeval_api": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_api-5.pkl"),
+        # "ours": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours-5.pkl"),
+        # "ours_suffix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_suffix-5.pkl"),
+        # "cceval_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/cceval_only_prefix-5.pkl"),
         "repoeval_line_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_line_only_prefix-5.pkl"),
-        "repoeval_api_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_api_only_prefix-5.pkl"),
-        "ours_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_only_prefix-5.pkl"),
-        "ours_suffix_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_suffix_only_prefix-5.pkl"),
+        # "repoeval_api_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_api_only_prefix-5.pkl"),
+        # "ours_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_only_prefix-5.pkl"),
+        # "ours_suffix_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_suffix_only_prefix-5.pkl"),
     }
     
     # for testing
@@ -267,7 +301,7 @@ def main():
         logger.info("Evaluating on {} dataset".format(key))
         save_path = f"{args.output_dir}/result/{key}/prediction.jsonl"
         if not os.path.exists(save_path):
-            for example in tqdm(examples):
+            for example in tqdm(examples[28:]):
                 sample_start_time = time.time()
                 if args.one_model:
                     generated_code = decoder.generate(
@@ -276,6 +310,21 @@ def main():
                         relevant_str=example.relevant_str,
                         ground_truth=example.middle,
                         prompt=example.prefix
+                    )
+                elif args.retrieve_draft:
+                    draft, target_line = get_draft_from_file(example.prefix.splitlines(keepends=True), example.prefix.count("\n"))
+                    if not draft and target_line:
+                        draft = get_draft_from_codeblock(example.relevant_codes, target_line)
+                    if not draft:
+                        draft = ""
+                    generated_code = decoder.generate(
+                        prefix=example.prefix_str,
+                        suffix=example.suffix_str,
+                        relevant_str=example.relevant_str,
+                        ground_truth=example.middle,
+                        trigger_point_idx=example.trigger_point_idx if args.trigger else None,
+                        prompt=example.prefix,
+                        small_output=draft
                     )
                 else:
                     generated_code = decoder.generate(
