@@ -1,4 +1,5 @@
 import torch
+import time
 from line_profiler import profile
 from typing import List
 from transformers import StoppingCriteria, StoppingCriteriaList
@@ -39,45 +40,18 @@ class PythonStatementStoppingCriteria(StoppingCriteria):
         self.NL_list = NL_list
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
-        if input_ids.shape[0] > 1:
-            for seq in input_ids:
-                # 获取新生成的部分（不包含 prompt）
-                generated_ids = seq[self.input_ids_len:]
-                new_text:str = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
-                
-                # 至少要生成出一行末才会被接受
-                if "\n" not in new_text:
-                    return False
-                
-                code = self.prompt
-                new_text_lines = new_text.splitlines(keepends=True)
-                parse_valid = False
-                for line in new_text_lines:
-                    code = code + line
-                    if is_parse_valid(self.parser, code):
-                        parse_valid = True
-                        break
-                
-                # 说明这一支仍然没生成出能被正确解析的语句，需要继续生成
-                if not parse_valid:
-                    return False
-            
-            # 如果从循环中退出，说明所有分支都已经有了能够被正确解析的语句，可以结束生成了
-            return True
+        # 检查是否出现换行
+        if not input_ids[0][-1].detach().cpu().numpy() in self.NL_list:
+            return False
         
-        else:
-            # 检查是否出现换行
-            if not input_ids[0][-1].detach().cpu().numpy() in self.NL_list:
-                return False
-            
-            # 获取新生成的部分（不包含 prompt）
-            generated_ids = input_ids[0, self.input_ids_len:]
-            new_text = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+        # 获取新生成的部分（不包含 prompt）
+        generated_ids = input_ids[0, self.input_ids_len:]
+        new_text = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
 
-            if is_parse_valid(self.parser, self.prompt + new_text):
-                return True  # 满足停止条件
-            else:
-                return False  # 继续生成
+        if is_parse_valid(self.parser, self.prompt + new_text):
+            return True  # 满足停止条件
+        else:
+            return False  # 继续生成
         
 class PythonLineStoppingCriteria(StoppingCriteria):
     def __init__(self, tokenizer, input_ids_len, NL_list:List[int]):
@@ -86,24 +60,11 @@ class PythonLineStoppingCriteria(StoppingCriteria):
         self.NL_list = NL_list
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
-        if input_ids.shape[0] > 1:
-            for seq in input_ids:
-                # 获取新生成的部分（不包含 prompt）
-                generated_ids = seq[self.input_ids_len:]
-                new_text:str = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
-                
-                # 至少要生成出一行末才会被接受
-                if "\n" not in new_text:
-                    return False
-            
-            # 如果从循环中退出，说明所有分支都已经生成了至少一行，可以结束生成了
-            return True        
-        else:
-            # 检查是否出现换行
-            if not input_ids[0][-1].detach().cpu().numpy() in self.NL_list:
-                return False
-            
-            return True
+        # 检查是否出现换行
+        if not input_ids[0][-1].detach().cpu().numpy() in self.NL_list:
+            return False
+        
+        return True
 
 class SPDecoding:
     def __init__(self, model, model_type, tokenizer, max_new_tokens, device, lang, parser, without_sp=False):
@@ -188,6 +149,8 @@ class SPDecoding:
                     mismatch_pos = "NotValidate"
                     max_new_tokens = self.max_new_tokens
                     flag = "Not_veri"
+                    mismatch = None
+                    early_stop_time = None
                 else:
                     outputs = self.model(large_input_ids, use_cache=True)
                     logits = outputs.logits
@@ -198,6 +161,7 @@ class SPDecoding:
                     pred_tokens = torch.argmax(logits[0, small_output_index-1:small_end_index], dim=-1)
                     
                     mismatch = (pred_tokens[:-1] != small_output_tokens).nonzero(as_tuple=True)
+                    early_stop_time = time.time()
                     if mismatch[0].numel() > 0:
                         mismatch_pos = mismatch[0][0].item()
                         large_input_ids = pred_tokens[mismatch_pos:mismatch_pos+1].unsqueeze(0)
@@ -219,10 +183,14 @@ class SPDecoding:
                 large_input_ids = origin_large_input_ids
                 mismatch_pos = "NotValidate"
                 max_new_tokens = self.max_new_tokens
+                mismatch = None
+                early_stop_time = None
             
             elif flag=='trigger':
                 mismatch_pos = "Trigger"
                 max_new_tokens = self.max_new_tokens
+                mismatch = None
+                early_stop_time = None
             else:
                 raise Exception
             
@@ -267,4 +235,4 @@ class SPDecoding:
                 new_text = self.tokenizer.decode(new_tokens, skip_special_tokens=True)
                 final_output =  new_text
 
-        return final_output
+        return final_output, mismatch, early_stop_time

@@ -24,7 +24,8 @@ def get_draft_from_file(lines: list[str], current_line_index: int):
     for i, line in enumerate(lines[::-1]):
         if line.strip():
             target_line = line
-            if '"""' in target_line or "'''" in target_line:
+            # 如果上一行是长字符串，就算了，因为没法判断是长字符串的开始还是结尾
+            if '"""' == target_line.strip() or "'''" == target_line.strip():
                 return None, None
             former_lines = lines[:-i-1]
             find = True
@@ -34,29 +35,83 @@ def get_draft_from_file(lines: list[str], current_line_index: int):
         return None, None
     
     for i in range(len(former_lines) - 1, -1, -1):
+        # 如果上一行以回车结束，说明补全是从全新的一行开始的
         if target_line.endswith("\n"):
+            # 如果有一行和上一行是一样的，那么就将它的下一行作为draft
             if former_lines[i].strip() == target_line.strip():
-                return lines[i + 1].rstrip('\n'), target_line
+                j = i + 1
+                # 如果下一行是空行或注释，就继续往下选
+                while j < len(lines) and (not lines[j].strip() or lines[j].strip().startswith("#")):
+                    j += 1
+                # 如果一直都是空行，视为没找到，继续往上查找与target_line相同的行
+                if j == len(lines):
+                    continue
+                else:
+                    draft = lines[j].rstrip('\n')
+                
+                # 对齐空格数量
+                draft_former_line_space_num = len(former_lines[i]) - len(former_lines[i].lstrip())
+                draft_space_num = len(draft) - len(draft.lstrip())
+                target_line_space_num = len(target_line) - len(target_line.lstrip())
+                draft = " " * (target_line_space_num + draft_space_num - draft_former_line_space_num) + draft.lstrip()
+                
+                return draft, target_line
+        # 否则补全是接着一行的前半部分进行的
+        # 查找的时候要做的就是前缀匹配，然后把后缀作为draft
         else:
-            if former_lines[i].rstrip().startswith(target_line.rstrip()):
-                start_position = lines[i].rstrip('\n').find(target_line.strip())
-                return lines[i].rstrip('\n')[start_position+len(target_line.strip()):], target_line
+            if former_lines[i].lstrip().startswith(target_line.lstrip()):
+                start_position = lines[i].find(target_line.strip())
+                return lines[i][start_position+len(target_line.strip()):], target_line
 
     return None, target_line
 
-def get_draft_from_codeblock(codeblock, target_line):
-    for cb in codeblock:
+def get_draft_from_codeblock(codeblocks, target_line):
+    for cb in codeblocks:
         lines = cb.code_content.splitlines(keepends=True)
-        if target_line.endswith("\n"):
-            for i, line in enumerate(lines):
-                if line.rstrip() == target_line.rstrip():
-                    if i != len(lines) - 1:
-                        return lines[i + 1]
-        else:
-            for i, line in enumerate(lines):
-                if line.rstrip().startswith(target_line.rstrip()):
-                    if i != len(lines) - 1:
-                        return lines[i + 1]
+        for i in range(len(lines) - 1, -1, -1):
+            line = lines[i]
+            # 跳过空行
+            if not line.strip():
+                continue
+
+            # 跳过 """ 或 ''' 的单独一行
+            if line.strip() in {'"""', "'''" }:
+                continue
+
+            if line.strip() == target_line.strip() and target_line.endswith("\n"):
+                # 补全是从下一行开始的
+                j = i + 1
+                while j < len(lines) and (not lines[j].strip() or lines[j].strip().startswith("#")):
+                    j += 1
+                if j == len(lines):
+                    continue
+                draft = lines[j].rstrip('\n')
+
+                # 对齐缩进
+                target_indent = len(target_line) - len(target_line.lstrip())
+                ref_indent = len(lines[i]) - len(lines[i].lstrip())
+                draft_indent = len(draft) - len(draft.lstrip())
+
+                aligned_draft = " " * (target_indent + draft_indent - ref_indent) + draft.lstrip()
+                return aligned_draft
+
+            elif line.strip().startswith(target_line.strip()) and not target_line.endswith("\n"):
+                # 补全是当前行的继续内容
+                start_position = line.find(target_line.strip())
+                if start_position != -1:
+                    return line[start_position + len(target_line.strip()):]
+    
+    if target_line.endswith("."):
+        target_parts = target_line.split()
+        target_obj = target_parts[-1]
+        for cb in codeblocks:
+            lines = cb.code_content.splitlines(keepends=True)
+            for line in lines:
+                if target_obj in line:
+                    start_position = line.find(target_obj)
+                    return line[start_position + len(target_obj):]
+        
+
     return None
 
 def format_example(args, tokenizer, example:Example):
@@ -84,7 +139,7 @@ def format_example(args, tokenizer, example:Example):
     large_input, small_input = relevant_contexts(small_relevant[:args.relevant_code_num], example.relevant_codes[:args.relevant_code_num], \
         tokenizer, cross_file_budget, small_repo_percent=args.repo_percent) #100% repo
     
-    if args.large_model_type is None:
+    if args.model_type is None:
         repo_input = small_input
     else:
         repo_input = large_input
@@ -119,8 +174,7 @@ def format_example(args, tokenizer, example:Example):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--l_model_name_or_path",  type=str,default="/nasdata/Model/Qwen2.5-Coder-7B", help="Path to the large model.")
-    parser.add_argument("--s_model_name_or_path",  type=str,default="/data/hanzhenlu/model/opc-sft-v1-modified", help="Path to the small model.")
+    parser.add_argument("--model_name_or_path",  type=str,default="/nasdata/Model/Qwen2.5-Coder-7B", help="Path to the large model.")
 
     parser.add_argument("--output_dir",  type=str, default='outputs', help="Path to save the generated outputs.")
     parser.add_argument("--lang", type=str, default="python", help="Programming language.")
@@ -134,7 +188,7 @@ def main():
     parser.add_argument("--one_model", action="store_true")
     parser.add_argument("--twice", action="store_true")
     parser.add_argument("--without_sp", action="store_true")
-    parser.add_argument("--large_model_type", default=None, choices=["qwen", "starcoder", "deepseek", "opc", None])
+    parser.add_argument("--model_type", default=None, choices=["qwen", "starcoder", "deepseek", "opc"])
     parser.add_argument("--relevant_code_num", default=5, type=int)
     parser.add_argument("--retrieve_draft", action="store_true")
     
@@ -146,38 +200,22 @@ def main():
     
     if args.twice:
         assert args.one_model
+    
+    assert args.model_type
 
-    if args.one_model:
-        if args.large_model_type:
-            logger.info(f"Loading large model from {args.l_model_name_or_path}")
-            l_tokenizer = AutoTokenizer.from_pretrained(args.l_model_name_or_path)
-            l_model = AutoModelForCausalLM.from_pretrained(args.l_model_name_or_path,torch_dtype=torch.float16).to(args.device)
-            l_model.eval()
-            logger.info("Large model loaded.")
-            
-            if l_tokenizer.pad_token is None:
-                l_tokenizer.pad_token = l_tokenizer.eos_token
-            
-        else:
-            logger.info(f"Loading small model from {args.s_model_name_or_path}")
-            s_tokenizer = AutoTokenizer.from_pretrained(args.s_model_name_or_path)
-            s_model = AutoModelForCausalLM.from_pretrained(args.s_model_name_or_path).to(args.device)
-            s_model.eval()
-            logger.info("Small model loaded.")
-            
-            if s_tokenizer.pad_token is None:
-                s_tokenizer.pad_token = s_tokenizer.eos_token
-            
+    if args.model_type == "opc":
+        logger.info(f"Loading small model from {args.model_name_or_path}")
+        tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
+        model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path).to(args.device)
     else:
-        # 1. 加载大模型和 Tokenizer
-        logger.info(f"Loading large model from {args.l_model_name_or_path}")
-        l_tokenizer = AutoTokenizer.from_pretrained(args.l_model_name_or_path)
-        l_model = AutoModelForCausalLM.from_pretrained(args.l_model_name_or_path,torch_dtype=torch.float16).to(args.device)
-        l_model.eval()
-        logger.info("Large model loaded.")
-        
-        if l_tokenizer.pad_token is None:
-            l_tokenizer.pad_token = l_tokenizer.eos_token
+        logger.info(f"Loading large model from {args.model_name_or_path}")
+        tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
+        model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, torch_dtype=torch.float16).to(args.device)
+    
+    model.eval()
+    logger.info(f"load: {args.model_name_or_path}")
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
     
     ## 加载parser
     PY_LANGUAGE = Language(tspython.language())
@@ -185,16 +223,16 @@ def main():
 
     step = "step7"
     all_eval_examples = {
-        # "cceval": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/cceval-5.pkl"),
-        # "repoeval_line": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_line-5.pkl"),
-        # "repoeval_api": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_api-5.pkl"),
-        # "ours": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours-5.pkl"),
-        # "ours_suffix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_suffix-5.pkl"),
-        # "cceval_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/cceval_only_prefix-5.pkl"),
+        "cceval": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/cceval-5.pkl"),
+        "repoeval_line": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_line-5.pkl"),
+        "repoeval_api": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_api-5.pkl"),
+        "ours": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours-5.pkl"),
+        "ours_suffix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_suffix-5.pkl"),
+        "cceval_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/cceval_only_prefix-5.pkl"),
         "repoeval_line_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_line_only_prefix-5.pkl"),
-        # "repoeval_api_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_api_only_prefix-5.pkl"),
-        # "ours_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_only_prefix-5.pkl"),
-        # "ours_suffix_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_suffix_only_prefix-5.pkl"),
+        "repoeval_api_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_api_only_prefix-5.pkl"),
+        "ours_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_only_prefix-5.pkl"),
+        "ours_suffix_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_suffix_only_prefix-5.pkl"),
     }
     
     # for testing
@@ -246,39 +284,25 @@ def main():
     for name,examples in tqdm(all_eval_examples.items(),desc="Formatting"):
         print(name)
         for example in examples:
-            example.relevant_str, example.prefix_str, example.suffix_str = format_example(args, l_tokenizer if args.large_model_type else s_tokenizer, example)
+            example.relevant_str, example.prefix_str, example.suffix_str = format_example(args, tokenizer, example)
             
     # 4. 初始化双模型解码器
     if args.one_model:
-        if args.large_model_type == "qwen" or args.large_model_type == "deepseek" or args.large_model_type == "starcoder":
-            decoder = SingleModelDecoding(
-                model=l_model,
-                model_type=args.large_model_type, # e.g., 'deepseek', 'qwen'
-                tokenizer=l_tokenizer,
-                max_new_tokens=args.max_new_tokens,
-                device=args.device,
-                lang=args.lang,
-                parser=parser,
-                twice=args.twice
-            )
-        elif args.large_model_type is None:
-            decoder = SingleModelDecoding(
-                model=s_model,
-                model_type="opc", # e.g., 'deepseek', 'qwen'
-                tokenizer=s_tokenizer,
-                max_new_tokens=args.max_new_tokens,
-                device=args.device,
-                lang=args.lang,
-                parser=parser,
-                twice=args.twice
-            )
-        else:
-            raise RuntimeError("Unsupport model type")
+        decoder = SingleModelDecoding(
+            model=model,
+            model_type=args.model_type, # e.g., 'deepseek', 'qwen'
+            tokenizer=tokenizer,
+            max_new_tokens=args.max_new_tokens,
+            device=args.device,
+            lang=args.lang,
+            parser=parser,
+            twice=args.twice
+        )
     else:
         decoder = SPDecoding(
-            model=l_model,
-            model_type=args.large_model_type, # e.g., 'deepseek', 'qwen'
-            tokenizer=l_tokenizer,
+            model=model,
+            model_type=args.model_type, # e.g., 'deepseek', 'qwen'
+            tokenizer=tokenizer,
             max_new_tokens=args.max_new_tokens,
             device=args.device,
             lang=args.lang,
@@ -296,12 +320,11 @@ def main():
             print(f"Switching to {key} task")
 
         time_stats[key] = {}
-        i = 0
         results = []
         logger.info("Evaluating on {} dataset".format(key))
         save_path = f"{args.output_dir}/result/{key}/prediction.jsonl"
         if not os.path.exists(save_path):
-            for example in tqdm(examples[28:]):
+            for example in tqdm(examples):
                 sample_start_time = time.time()
                 if args.one_model:
                     generated_code = decoder.generate(
@@ -317,7 +340,7 @@ def main():
                         draft = get_draft_from_codeblock(example.relevant_codes, target_line)
                     if not draft:
                         draft = ""
-                    generated_code = decoder.generate(
+                    generated_code, mismatch, early_stop_time = decoder.generate(
                         prefix=example.prefix_str,
                         suffix=example.suffix_str,
                         relevant_str=example.relevant_str,
@@ -327,7 +350,7 @@ def main():
                         small_output=draft
                     )
                 else:
-                    generated_code = decoder.generate(
+                    generated_code, mismatch, early_stop_time = decoder.generate(
                         prefix=example.prefix_str,
                         suffix=example.suffix_str,
                         relevant_str=example.relevant_str,
@@ -338,6 +361,8 @@ def main():
                     )
 
                 sample_end_time = time.time()
+                if mismatch is not None:
+                    mismatch = mismatch[0].tolist()
                 if args.trigger:
                     if example.trigger_point_idx != None:
                         generated_code = example.middle[:example.trigger_point_idx]+generated_code
@@ -349,16 +374,10 @@ def main():
                     "generated": generated_code,
                     "ground_truth":example.middle,
                     "time": sample_end_time - sample_start_time,
-                    "small_output":example.small_pred
-                })
-                i += 1
-                # del generated_code
-                # if i % flash == 0:
-                    # logger.info(f"Empty GPU memory")
-            #         torch.cuda.empty_cache()  
-            #         gc.collect()
-            # torch.cuda.empty_cache()  
-            # gc.collect()        
+                    "early_stop_time": sample_end_time - early_stop_time,
+                    "small_output":example.small_pred,
+                    "mismatch": mismatch
+                }) 
 
             total_time = sum(result["time"] for result in results)
             avg_time_per_sample = total_time / len(results)
@@ -375,8 +394,10 @@ def main():
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             with open(save_path, "w", encoding="utf-8") as f:
                 for result in tqdm(results,desc='Saving'):
-                    f.write(json.dumps({"task_id": result["id"], "pred": result["generated"],"time":result['time'],'small_output':result['small_output'], \
-                        'ground_truth':result['ground_truth'],'prefix':result['prefix'],'suffix':result['suffix']}) + "\n")
+                    f.write(json.dumps({"task_id": result["id"], "pred": result["generated"], "time":result['time'], \
+                        'small_output':result['small_output'], 'ground_truth':result['ground_truth'], \
+                        'prefix':result['prefix'], 'suffix':result['suffix'], "mismatch":result["mismatch"], \
+                        "early_stop_time":result["early_stop_time"]}) + "\n")
         results = compute_metric_stmt(f"{args.output_dir}/result/{key}", args)
 
         # 将评估结果添加到时间统计中
