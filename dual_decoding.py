@@ -67,13 +67,12 @@ class PythonLineStoppingCriteria(StoppingCriteria):
         return True
 
 class SPDecoding:
-    def __init__(self, model, model_type, tokenizer, max_new_tokens, device, lang, parser, without_sp=False):
+    def __init__(self, model, model_type, tokenizer, max_new_tokens, device, parser, without_sp=False):
         self.model = model
         self.model_type = model_type
         self.tokenizer = tokenizer
         self.max_new_tokens = max_new_tokens
         self.device = device
-        self.lang = lang
         self.without_sp = without_sp
         
         self.parser = parser

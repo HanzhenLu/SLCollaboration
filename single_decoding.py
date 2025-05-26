@@ -79,13 +79,12 @@ class PythonLineStoppingCriteria(StoppingCriteria):
             return True
         
 class SingleModelDecoding:
-    def __init__(self, model, model_type, tokenizer, max_new_tokens, device, lang, parser, twice=False):
+    def __init__(self, model, model_type, tokenizer, max_new_tokens, device, parser, twice=False):
         self.model = model
         self.model_type = model_type
         self.tokenizer = tokenizer
         self.max_new_tokens = max_new_tokens
         self.device = device
-        self.lang = lang
         self.parser=parser
         self.task=None
         self.twice = twice

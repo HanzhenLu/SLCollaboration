@@ -139,7 +139,7 @@ def format_example(args, tokenizer, example:Example):
     large_input, small_input = relevant_contexts(small_relevant[:args.relevant_code_num], example.relevant_codes[:args.relevant_code_num], \
         tokenizer, cross_file_budget, small_repo_percent=args.repo_percent) #100% repo
     
-    if args.model_type is None:
+    if args.model_type == "opc":
         repo_input = small_input
     else:
         repo_input = large_input
@@ -177,7 +177,6 @@ def main():
     parser.add_argument("--model_name_or_path",  type=str,default="/nasdata/Model/Qwen2.5-Coder-7B", help="Path to the large model.")
 
     parser.add_argument("--output_dir",  type=str, default='outputs', help="Path to save the generated outputs.")
-    parser.add_argument("--lang", type=str, default="python", help="Programming language.")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device to use (cuda or cpu).")
     parser.add_argument("--max_input_length", type=int, default=2048, help="Maximum generation length.")
     parser.add_argument("--max_new_tokens", type=int, default=64)
@@ -201,6 +200,10 @@ def main():
     if args.twice:
         assert args.one_model
     
+    if args.model_type == "opc":
+        # 小模型是拿不到用自己生成内容检索到的信息的
+        assert args.repo_percent == 1
+    
     assert args.model_type
 
     if args.model_type == "opc":
@@ -210,7 +213,7 @@ def main():
     else:
         logger.info(f"Loading large model from {args.model_name_or_path}")
         tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
-        model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path).to(args.device)
+        model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, torch_dtype=torch.bfloat16).to(args.device)
     
     model.eval()
     logger.info(f"load: {args.model_name_or_path}")
@@ -221,65 +224,36 @@ def main():
     PY_LANGUAGE = Language(tspython.language())
     parser = Parser(PY_LANGUAGE)
 
-    step = "step7"
-    all_eval_examples = {
-        "cceval": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/cceval-5.pkl"),
-        "repoeval_line": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_line-5.pkl"),
-        "repoeval_api": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_api-5.pkl"),
-        "ours": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours-5.pkl"),
-        "ours_suffix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_suffix-5.pkl"),
-        "cceval_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/cceval_only_prefix-5.pkl"),
-        "repoeval_line_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_line_only_prefix-5.pkl"),
-        "repoeval_api_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/repoeval_api_only_prefix-5.pkl"),
-        "ours_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_only_prefix-5.pkl"),
-        "ours_suffix_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/{step}/ours_suffix_only_prefix-5.pkl"),
-    }
-    
-    # for testing
-    # all_eval_examples = {}
-    # def dict_to_code_block(data) -> CodeBlock:
-    #     """
-    #     Convert a dictionary to a CodeBlock object.
-    #     """
-    #     return CodeBlock(
-    #         file_path=data["file_path"],
-    #         code_content=data["code_content"]
-    #     )
-    
-    # def dict_to_example(data) -> Example:
-    #     """
-    #     Convert a dictionary to an Example object.
-    #     """
-    #     relevant_codes = [dict_to_code_block(code_block_data) for code_block_data in (data.get("relevant_codes") or [])]
-    #     full_line_relevant_stmts = [dict_to_code_block(stmt_data) for stmt_data in (data.get("full_line_relevant_stmts") or [])]
-    #     full_line_relevant_codes = [dict_to_code_block(code_block_data) for code_block_data in (data.get("full_line_relevant_codes") or [])]
-    #     small_relevant_stmts = [dict_to_code_block(stmt_data) for stmt_data in (data.get("small_relevant_stmts") or [])]
-    #     small_relevant_codes = [dict_to_code_block(code_block_data) for code_block_data in (data.get("small_relevant_codes") or [])]
-    #     small_relevant_local_stmts = [dict_to_code_block(stmt_data) for stmt_data in (data.get("small_relevant_local_stmts") or [])]
-        
-    #     return Example(
-    #         task_id=data["task_id"],
-    #         prefix=data["prefix"],
-    #         suffix=data["suffix"],
-    #         middle=data["middle"],
-    #         relevant_codes=relevant_codes,
-    #         small_pred=data["small_pred"],
-    #         correct=data["correct"],
-    #         full_line_relevant_stmts=full_line_relevant_stmts,
-    #         full_line_relevant_codes=full_line_relevant_codes,
-    #         small_relevant_stmts=small_relevant_stmts,
-    #         small_relevant_codes=small_relevant_codes,
-    #         small_relevant_local_stmts=small_relevant_local_stmts
-    #     )
-
-    # bn = "ours"
-    # examples = []
-    # with open(f"preprocessed_retrieval_twice/step7/{bn}-5.jsonl", 'r') as f:
-    #     for line in f:
-    #         example_dict = json.loads(line)
-    #         examples.append(dict_to_example(example_dict))
-    # all_eval_examples[f"{bn}"] = examples
-    # for testing end
+    if args.one_model:
+        all_eval_examples = {
+            # "cceval": load_dataset_from_path(f"preprocessed/cceval-5.pkl"),
+            "repoeval_line": load_dataset_from_path(f"preprocessed/repoeval_line-5.pkl"),
+            "repoeval_api": load_dataset_from_path(f"preprocessed/repoeval_api-5.pkl"),
+            "ours": load_dataset_from_path(f"preprocessed/ours-5.pkl"),
+            "ours_suffix": load_dataset_from_path(f"preprocessed/ours_suffix-5.pkl"),
+            "execrepoeval": load_dataset_from_path("preprocessed/execrepoeval-5.pkl"),
+            # "cceval_prefix": load_dataset_from_path(f"preprocessed/cceval_only_prefix-5.pkl"),
+            "repoeval_line_prefix": load_dataset_from_path(f"preprocessed/repoeval_line_only_prefix-5.pkl"),
+            "repoeval_api_prefix": load_dataset_from_path(f"preprocessed/repoeval_api_only_prefix-5.pkl"),
+            "ours_prefix": load_dataset_from_path(f"preprocessed/ours_only_prefix-5.pkl"),
+            "ours_suffix_prefix": load_dataset_from_path(f"preprocessed/ours_suffix_only_prefix-5.pkl"),
+            "execrepoeval_prefix": load_dataset_from_path("preprocessed/execrepoeval_only_prefix-5.pkl")
+        }
+    else:
+        all_eval_examples = {
+            # "cceval": load_dataset_from_path(f"preprocessed_retrieval_twice/3080ti/cceval-5.pkl"),
+            "repoeval_line": load_dataset_from_path(f"preprocessed_retrieval_twice/3080ti/repoeval_line-5.pkl"),
+            "repoeval_api": load_dataset_from_path(f"preprocessed_retrieval_twice/3080ti/repoeval_api-5.pkl"),
+            "ours": load_dataset_from_path(f"preprocessed_retrieval_twice/3080ti/ours-5.pkl"),
+            "ours_suffix": load_dataset_from_path(f"preprocessed_retrieval_twice/3080ti/ours_suffix-5.pkl"),
+            "execrepoeval": load_dataset_from_path("preprocessed_retrieval_twice/3080ti/execrepoeval-5.pkl"),
+            # "cceval_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/3080ti/cceval_only_prefix-5.pkl"),
+            "repoeval_line_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/3080ti/repoeval_line_only_prefix-5.pkl"),
+            "repoeval_api_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/3080ti/repoeval_api_only_prefix-5.pkl"),
+            "ours_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/3080ti/ours_only_prefix-5.pkl"),
+            "ours_suffix_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/3080ti/ours_suffix_only_prefix-5.pkl"),
+            "execrepoeval_prefix": load_dataset_from_path("preprocessed_retrieval_twice/3080ti/execrepoeval_only_prefix-5.pkl")
+        }
     
     for name,examples in tqdm(all_eval_examples.items(),desc="Formatting"):
         print(name)
@@ -294,7 +268,6 @@ def main():
             tokenizer=tokenizer,
             max_new_tokens=args.max_new_tokens,
             device=args.device,
-            lang=args.lang,
             parser=parser,
             twice=args.twice
         )
@@ -305,7 +278,6 @@ def main():
             tokenizer=tokenizer,
             max_new_tokens=args.max_new_tokens,
             device=args.device,
-            lang=args.lang,
             parser=parser,
             without_sp=args.without_sp
         )

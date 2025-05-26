@@ -90,7 +90,7 @@ def remove_comments(code):
     return code
 
 def process_example_inline(lang, parser, pred, groundtruth, prefix):
-    prediction = postprocess_code_lines(prefix,pred,parser,lang)
+    prediction = postprocess_code_lines(prefix, pred, parser, lang)
     target = groundtruth
     target = remove_comments(target)
     pred_lines = [l.strip() for l in prediction.split("\n") if l.strip()]
@@ -98,7 +98,7 @@ def process_example_inline(lang, parser, pred, groundtruth, prefix):
     # em_label = int(pred_lines == gt_lines)
     return prediction, pred_lines == gt_lines
 
-def process_examples(lang,parser, args):
+def process_examples(lang, parser, args):
     sample = args
 
     prediction = postprocess_code_lines(sample["prefix"], sample["pred"], parser, lang)
