@@ -210,7 +210,7 @@ def main():
     else:
         logger.info(f"Loading large model from {args.model_name_or_path}")
         tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
-        model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, torch_dtype=torch.float16).to(args.device)
+        model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path).to(args.device)
     
     model.eval()
     logger.info(f"load: {args.model_name_or_path}")
@@ -334,6 +334,8 @@ def main():
                         ground_truth=example.middle,
                         prompt=example.prefix
                     )
+                    mismatch = None
+                    early_stop_time = None
                 elif args.retrieve_draft:
                     draft, target_line = get_draft_from_file(example.prefix.splitlines(keepends=True), example.prefix.count("\n"))
                     if not draft and target_line:
@@ -374,7 +376,7 @@ def main():
                     "generated": generated_code,
                     "ground_truth":example.middle,
                     "time": sample_end_time - sample_start_time,
-                    "early_stop_time": sample_end_time - early_stop_time,
+                    "early_stop_time": sample_end_time - early_stop_time if early_stop_time else None,
                     "small_output":example.small_pred,
                     "mismatch": mismatch
                 }) 
