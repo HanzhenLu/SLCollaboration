@@ -96,6 +96,10 @@ class SPDecoding:
             self.token_mapping["suffix"] = "<SUFFIX>"
             self.tokenizer.eos_token_id = 2
             self.tokenizer.eos_token = "<EOS>"
+        elif "llama" == model_type:
+            self.token_mapping["prefix"] = "▁<PRE>"
+            self.token_mapping["middle"] = "▁<MID>"
+            self.token_mapping["suffix"] = "▁<SUF>"
 
         self.NL_list = [id for _, id in tokenizer.vocab.items() if tokenizer.decode(id).endswith("\n")]
         
@@ -119,7 +123,7 @@ class SPDecoding:
         else:
             flag = "verified"
         
-        if self.model_type == "qwen" or self.model_type == "starcoder":
+        if self.model_type in ["llama", "qwen", "starcoder"]:
             context = f"{self.token_mapping['prefix']}{relevant_str}{prefix}{self.token_mapping['suffix']}{suffix}{self.token_mapping['middle']}{small_output}"
             origin_context = f"{self.token_mapping['prefix']}{relevant_str}{prefix}{self.token_mapping['suffix']}{suffix}{self.token_mapping['middle']}"
         elif self.model_type == "deepseek":

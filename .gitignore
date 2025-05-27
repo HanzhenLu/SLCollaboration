@@ -6,3 +6,4 @@ preprocessed_retrieval_twice/
 *.lprof
 *.sh
 *.ipynb
+*.json

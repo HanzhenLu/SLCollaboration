@@ -187,7 +187,7 @@ def main():
     parser.add_argument("--one_model", action="store_true")
     parser.add_argument("--twice", action="store_true")
     parser.add_argument("--without_sp", action="store_true")
-    parser.add_argument("--model_type", default=None, choices=["qwen", "starcoder", "deepseek", "opc"])
+    parser.add_argument("--model_type", default=None, choices=["qwen", "starcoder", "deepseek", "opc", "llama"])
     parser.add_argument("--relevant_code_num", default=5, type=int)
     parser.add_argument("--retrieve_draft", action="store_true")
     
@@ -224,7 +224,7 @@ def main():
     PY_LANGUAGE = Language(tspython.language())
     parser = Parser(PY_LANGUAGE)
 
-    if args.one_model:
+    if args.one_model or args.retrieve_draft:
         all_eval_examples = {
             # "cceval": load_dataset_from_path(f"preprocessed/cceval-5.pkl"),
             "repoeval_line": load_dataset_from_path(f"preprocessed/repoeval_line-5.pkl"),

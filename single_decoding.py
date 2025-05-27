@@ -90,33 +90,29 @@ class SingleModelDecoding:
         self.twice = twice
         self.model_type = model_type
         # FIM special tokens
-        if model_type == 'qwen':
-            self.token_mapping = {
-                "prefix": "<|fim_prefix|>",
-                "middle": "<|fim_middle|>",
-                "suffix": "<|fim_suffix|>",
-                "pad":  "<|fim_pad|>"
-            }
-        elif model_type == "deepseek":
-            self.token_mapping = {
-                "prefix": "<｜fim▁begin｜>",
-                "middle": "<｜fim▁hole｜>",
-                "suffix": "<｜fim▁end｜>",
-                "pad":  "<pad>"
-            }
-        elif model_type == "starcoder":
-            self.token_mapping = {
-                "prefix": "<fim_prefix>",
-                "middle": "<fim_middle>",
-                "suffix": "<fim_suffix>"
-            }
-        elif model_type == 'opc':
-            self.token_mapping = {
-                "prefix": "<PREFIX>",
-                "middle": "<MIDDLE>",
-                "suffix": "<SUFFIX>",
-                "pad":  "<PAD>"
-            }
+        self.token_mapping = {}
+        if 'qwen' == model_type:
+            self.token_mapping["prefix"] = "<|fim_prefix|>"
+            self.token_mapping["middle"] = "<|fim_middle|>"
+            self.token_mapping["suffix"] = "<|fim_suffix|>"
+        elif 'deepseek' == model_type:
+            self.token_mapping["prefix"] = '<｜fim▁begin｜>'
+            self.token_mapping["middle"] = '<｜fim▁hole｜>'
+            self.token_mapping["suffix"] = '<｜fim▁end｜>'
+        elif "starcoder" == model_type:
+            self.token_mapping["prefix"] = "<fim_prefix>"
+            self.token_mapping["middle"] = "<fim_middle>"
+            self.token_mapping["suffix"] = "<fim_suffix>"
+        elif "opc" == model_type:
+            self.token_mapping["prefix"] = "<PREFIX>"
+            self.token_mapping["middle"] = "<MIDDLE>"
+            self.token_mapping["suffix"] = "<SUFFIX>"
+            self.tokenizer.eos_token_id = 2
+            self.tokenizer.eos_token = "<EOS>"
+        elif "llama" == model_type:
+            self.token_mapping["prefix"] = "▁<PRE>"
+            self.token_mapping["middle"] = "▁<MID>"
+            self.token_mapping["suffix"] = "▁<SUF>"
         
         # 收集以\n结尾的token_id以实现早停止
         self.NL_list = [id for _, id in tokenizer.vocab.items() if tokenizer.decode(id).endswith("\n")]
@@ -133,7 +129,7 @@ class SingleModelDecoding:
             suffix: 后缀文本
         """
         # 构造完整上下文
-        if self.model_type == "qwen":
+        if self.model_type in ["qwen", "llama", "starcoder"]:
             context = f"{self.token_mapping['prefix']}{relevant_str}{prefix}{self.token_mapping['suffix']}{suffix}{self.token_mapping['middle']}"
             context_ids = self.tokenizer(context, return_tensors="pt").input_ids.to(self.device)
         elif self.model_type == "opc":
@@ -141,9 +137,6 @@ class SingleModelDecoding:
             context_ids = self.tokenizer(context, return_tensors="pt", add_special_tokens=False).input_ids.to(self.device)
         elif self.model_type == "deepseek":
             context = f"{self.token_mapping['prefix']}{relevant_str}{prefix}{self.token_mapping['middle']}{suffix}{self.token_mapping['suffix']}"
-            context_ids = self.tokenizer(context, return_tensors="pt").input_ids.to(self.device)
-        elif self.model_type == "starcoder":
-            context = f"{self.token_mapping['prefix']}{relevant_str}{prefix}{self.token_mapping['suffix']}{suffix}{self.token_mapping['middle']}"
             context_ids = self.tokenizer(context, return_tensors="pt").input_ids.to(self.device)
         else:
             raise RuntimeError("Unsupported model")

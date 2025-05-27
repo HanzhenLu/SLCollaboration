@@ -86,7 +86,7 @@ def postprocess_code_lines(prompt, completion, parser, lang):
 
 def remove_comments(code):
     code = re.sub(r'#.*', '', code)
-    code = re.sub(r'//.*', '', code)
+    # code = re.sub(r'//.*', '', code)
     return code
 
 def process_example_inline(lang, parser, pred, groundtruth, prefix):

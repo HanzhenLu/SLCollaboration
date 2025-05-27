@@ -273,7 +273,7 @@ def process_item(item):
     # completion_local_stmt_sorted_indices = np.argsort(completion_local_stmt_scores)[::-1][:global_args.relevant_code_num]
     # completion_retrieved_local_stmts = [local_stmt_blocks[idx] for idx in completion_local_stmt_sorted_indices]
     
-    if left_context.endswith("\n"):
+    if left_context.endswith("\n") or left_context.strip() == "":
         full_line_relevant_stmts = None
         full_line_relevant_codes = None
     else:
