@@ -102,6 +102,14 @@ class SPDecoding:
             self.token_mapping["suffix"] = "▁<SUF>"
 
         self.NL_list = [id for _, id in tokenizer.vocab.items() if tokenizer.decode(id).endswith("\n")]
+    
+    def encode_infilling(self, s:str):
+        """专门给CodeLlama使用的特殊encode"""
+        return self.tokenizer.encode("☺" + s)[3:]
+
+    def decode_infilling(self, t:List[int]):
+        """专门给CodeLlama使用的特殊decode"""
+        return self.tokenizer.decode([self.tokenizer.convert_tokens_to_ids("☺")] + t, skip_special_tokens=True)[1:]
         
     def set_task(self,task):
         self.task = task
@@ -111,19 +119,21 @@ class SPDecoding:
         """生成代码"""
         small_output = kwargs["small_output"]
         
-        # if kwargs["correct"]:
-        #     return small_output, None
-        
         if trigger_point_idx is not None:
-            trigger_str = ground_truth[:trigger_point_idx]
-            small_output = trigger_str
+            trigger_str = ground_truth[:trigger_point_idx+1]
+            prefix += trigger_str
+            if small_output.startswith(trigger_str):
+                small_output = small_output[trigger_point_idx+1:]
+            else:
+                small_output = ""
             flag = "trigger"
         elif self.without_sp:
             flag = "Not_veri"
         else:
             flag = "verified"
         
-        if self.model_type in ["llama", "qwen", "starcoder"]:
+        # 准备用于投机采样的输入和正常的输入
+        if self.model_type in ["qwen", "starcoder"]:
             context = f"{self.token_mapping['prefix']}{relevant_str}{prefix}{self.token_mapping['suffix']}{suffix}{self.token_mapping['middle']}{small_output}"
             origin_context = f"{self.token_mapping['prefix']}{relevant_str}{prefix}{self.token_mapping['suffix']}{suffix}{self.token_mapping['middle']}"
         elif self.model_type == "deepseek":
@@ -132,21 +142,40 @@ class SPDecoding:
         elif self.model_type == "opc":
             context = f"{self.token_mapping['suffix']}{suffix}{self.token_mapping['prefix']}{relevant_str}{prefix}{self.token_mapping['middle']}{small_output}"
             origin_context = f"{self.token_mapping['suffix']}{suffix}{self.token_mapping['prefix']}{relevant_str}{prefix}{self.token_mapping['middle']}"
-        else:
-            raise RuntimeError(f"Unsupported model_type: {self.model_type}")
 
         if self.model_type == "opc":
             large_input_ids = self.tokenizer(context, return_tensors="pt", add_special_tokens=False).input_ids.to(self.device)
             origin_large_input_ids = self.tokenizer(origin_context, return_tensors="pt", add_special_tokens=False).input_ids.to(self.device)
-        else:
+        elif self.model_type != "llama":
             large_input_ids = self.tokenizer(context, return_tensors="pt").input_ids.to(self.device)
             origin_large_input_ids = self.tokenizer(origin_context, return_tensors="pt").input_ids.to(self.device)
 
-        small_output_tokens = self.tokenizer(small_output, return_tensors="pt", add_special_tokens=False).input_ids.to(self.device)[0]
+        # CodeLlama 会在句首插入空格，导致token不一致，因此需要特殊处理
+        if self.model_type == "llama":
+            large_input_ids = [
+                [self.tokenizer.bos_token_id, self.tokenizer.prefix_id]
+                + self.tokenizer.encode(f"{relevant_str}{prefix}", add_special_tokens=False)
+                + [self.tokenizer.suffix_id] + self.encode_infilling(suffix) + [self.tokenizer.middle_id]
+                + self.encode_infilling(small_output)
+            ]
+            large_input_ids = torch.tensor(large_input_ids, dtype=torch.long).to(self.device)
+            
+            origin_large_input_ids = [
+                [self.tokenizer.bos_token_id, self.tokenizer.prefix_id]
+                + self.tokenizer.encode(f"{relevant_str}{prefix}", add_special_tokens=False)
+                + [self.tokenizer.suffix_id] + self.encode_infilling(suffix) + [self.tokenizer.middle_id]
+            ]
+            origin_large_input_ids = torch.tensor(origin_large_input_ids, dtype=torch.long).to(self.device)
+            
+            small_output_tokens = self.encode_infilling(small_output)
+            small_output_tokens = torch.tensor(small_output_tokens, dtype=torch.long).to(self.device)
+        else:
+            small_output_tokens = self.tokenizer(small_output, return_tensors="pt", add_special_tokens=False).input_ids.to(self.device)[0]
         small_output_index = origin_large_input_ids.shape[1]
         
+        # 开始生成
         with torch.no_grad():
-            if flag == 'verified':
+            if flag == 'verified' or flag == "trigger":
                 if len(small_output_tokens) == 0:
                     large_input_ids = origin_large_input_ids
                     mismatch_pos = "NotValidate"
@@ -188,16 +217,10 @@ class SPDecoding:
                 max_new_tokens = self.max_new_tokens
                 mismatch = None
                 early_stop_time = None
-            
-            elif flag=='trigger':
-                mismatch_pos = "Trigger"
-                max_new_tokens = self.max_new_tokens
-                mismatch = None
-                early_stop_time = None
             else:
                 raise Exception
             
-            if flag == "verified":
+            if flag == "verified" or flag == "trigger":
                 valid_small_output = self.tokenizer.decode(small_output_tokens[:mismatch_pos], skip_special_tokens=True)
                 
                 if self.task == "repoeval_line" or self.task == "repoeval_line_prefix":
@@ -236,6 +259,6 @@ class SPDecoding:
 
                 # 使用 tokenizer 只对新的 token 进行解码
                 new_text = self.tokenizer.decode(new_tokens, skip_special_tokens=True)
-                final_output =  new_text
+                final_output = new_text
 
         return final_output, mismatch, early_stop_time

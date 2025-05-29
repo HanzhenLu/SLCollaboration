@@ -120,7 +120,7 @@ class SingleModelDecoding:
     def set_task(self, task):
         self.task = task
         
-    def generate(self, prefix="", suffix="", relevant_str='', **kwargs):
+    def generate(self, prefix="", suffix="", relevant_str='', trigger_point_idx=None, **kwargs):
         """生成代码
         Args:
             input_ids: 输入的token ids
@@ -128,6 +128,10 @@ class SingleModelDecoding:
             prefix: 前缀文本
             suffix: 后缀文本
         """
+        if trigger_point_idx is not None:
+            trigger_str = kwargs["ground_truth"][:trigger_point_idx+1]
+            prefix += trigger_str
+        
         # 构造完整上下文
         if self.model_type in ["qwen", "llama", "starcoder"]:
             context = f"{self.token_mapping['prefix']}{relevant_str}{prefix}{self.token_mapping['suffix']}{suffix}{self.token_mapping['middle']}"

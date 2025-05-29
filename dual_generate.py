@@ -226,33 +226,25 @@ def main():
 
     if args.one_model or args.retrieve_draft:
         all_eval_examples = {
-            # "cceval": load_dataset_from_path(f"preprocessed/cceval-5.pkl"),
             "repoeval_line": load_dataset_from_path(f"preprocessed/repoeval_line-5.pkl"),
             "repoeval_api": load_dataset_from_path(f"preprocessed/repoeval_api-5.pkl"),
             "ours": load_dataset_from_path(f"preprocessed/ours-5.pkl"),
             "ours_suffix": load_dataset_from_path(f"preprocessed/ours_suffix-5.pkl"),
-            "execrepoeval": load_dataset_from_path("preprocessed/execrepoeval-5.pkl"),
-            # "cceval_prefix": load_dataset_from_path(f"preprocessed/cceval_only_prefix-5.pkl"),
             "repoeval_line_prefix": load_dataset_from_path(f"preprocessed/repoeval_line_only_prefix-5.pkl"),
             "repoeval_api_prefix": load_dataset_from_path(f"preprocessed/repoeval_api_only_prefix-5.pkl"),
             "ours_prefix": load_dataset_from_path(f"preprocessed/ours_only_prefix-5.pkl"),
             "ours_suffix_prefix": load_dataset_from_path(f"preprocessed/ours_suffix_only_prefix-5.pkl"),
-            "execrepoeval_prefix": load_dataset_from_path("preprocessed/execrepoeval_only_prefix-5.pkl")
         }
     else:
         all_eval_examples = {
-            # "cceval": load_dataset_from_path(f"preprocessed_retrieval_twice/3080ti/cceval-5.pkl"),
-            "repoeval_line": load_dataset_from_path(f"preprocessed_retrieval_twice/3080ti/repoeval_line-5.pkl"),
-            "repoeval_api": load_dataset_from_path(f"preprocessed_retrieval_twice/3080ti/repoeval_api-5.pkl"),
-            "ours": load_dataset_from_path(f"preprocessed_retrieval_twice/3080ti/ours-5.pkl"),
-            "ours_suffix": load_dataset_from_path(f"preprocessed_retrieval_twice/3080ti/ours_suffix-5.pkl"),
-            "execrepoeval": load_dataset_from_path("preprocessed_retrieval_twice/3080ti/execrepoeval-5.pkl"),
-            # "cceval_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/3080ti/cceval_only_prefix-5.pkl"),
-            "repoeval_line_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/3080ti/repoeval_line_only_prefix-5.pkl"),
-            "repoeval_api_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/3080ti/repoeval_api_only_prefix-5.pkl"),
-            "ours_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/3080ti/ours_only_prefix-5.pkl"),
-            "ours_suffix_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/3080ti/ours_suffix_only_prefix-5.pkl"),
-            "execrepoeval_prefix": load_dataset_from_path("preprocessed_retrieval_twice/3080ti/execrepoeval_only_prefix-5.pkl")
+            "repoeval_line": load_dataset_from_path(f"preprocessed_retrieval_twice/repoeval_line-5.pkl"),
+            "repoeval_api": load_dataset_from_path(f"preprocessed_retrieval_twice/repoeval_api-5.pkl"),
+            "ours": load_dataset_from_path(f"preprocessed_retrieval_twice/ours-5.pkl"),
+            "ours_suffix": load_dataset_from_path(f"preprocessed_retrieval_twice/ours_suffix-5.pkl"),
+            "repoeval_line_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/repoeval_line_only_prefix-5.pkl"),
+            "repoeval_api_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/repoeval_api_only_prefix-5.pkl"),
+            "ours_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/ours_only_prefix-5.pkl"),
+            "ours_suffix_prefix": load_dataset_from_path(f"preprocessed_retrieval_twice/ours_suffix_only_prefix-5.pkl")
         }
     
     for name,examples in tqdm(all_eval_examples.items(),desc="Formatting"):
@@ -261,7 +253,7 @@ def main():
             example.relevant_str, example.prefix_str, example.suffix_str = format_example(args, tokenizer, example)
             
     # 4. 初始化双模型解码器
-    if args.one_model:
+    if args.one_model and not args.retrieve_draft:
         decoder = SingleModelDecoding(
             model=model,
             model_type=args.model_type, # e.g., 'deepseek', 'qwen'
@@ -297,18 +289,29 @@ def main():
         save_path = f"{args.output_dir}/result/{key}/prediction.jsonl"
         if not os.path.exists(save_path):
             for example in tqdm(examples):
+                # 使用pickle.load并不会重新初始化trigger_point_idx这个值
+                # 如果在preprocess_twice时find_min_update是错误的
+                # 需要手动地更新一下
+                example.update_trigger_point_idx()
+                
+                # 如果没有trigger_point，说明用户会自己补完
+                # 虽然有trigger_point，但是放在了这一行的末尾时，其实也算是生成失败了
+                if args.trigger and (not example.trigger_point_idx or example.trigger_point_idx + 1 == len(example.middle)):
+                    results.append({
+                        "id": example.task_id,
+                        "prefix": example.prefix,
+                        "suffix": example.suffix,
+                        "generated": "",
+                        "ground_truth":example.middle,
+                        "time": 0,
+                        "early_stop_time": None,
+                        "small_output":example.small_pred,
+                        "mismatch": None
+                    }) 
+                    continue
+                
                 sample_start_time = time.time()
-                if args.one_model:
-                    generated_code = decoder.generate(
-                        prefix=example.prefix_str,
-                        suffix=example.suffix_str,
-                        relevant_str=example.relevant_str,
-                        ground_truth=example.middle,
-                        prompt=example.prefix
-                    )
-                    mismatch = None
-                    early_stop_time = None
-                elif args.retrieve_draft:
+                if args.retrieve_draft:
                     draft, target_line = get_draft_from_file(example.prefix.splitlines(keepends=True), example.prefix.count("\n"))
                     if not draft and target_line:
                         draft = get_draft_from_codeblock(example.relevant_codes, target_line)
@@ -319,10 +322,21 @@ def main():
                         suffix=example.suffix_str,
                         relevant_str=example.relevant_str,
                         ground_truth=example.middle,
-                        trigger_point_idx=example.trigger_point_idx if args.trigger else None,
+                        trigger_point_idx=None,
                         prompt=example.prefix,
                         small_output=draft
                     )
+                elif args.one_model:
+                    generated_code = decoder.generate(
+                        prefix=example.prefix_str,
+                        suffix=example.suffix_str,
+                        relevant_str=example.relevant_str,
+                        trigger_point_idx=example.trigger_point_idx if args.trigger else None,
+                        ground_truth=example.middle,
+                        prompt=example.prefix
+                    )
+                    mismatch = None
+                    early_stop_time = None
                 else:
                     generated_code, mismatch, early_stop_time = decoder.generate(
                         prefix=example.prefix_str,
@@ -339,7 +353,7 @@ def main():
                     mismatch = mismatch[0].tolist()
                 if args.trigger:
                     if example.trigger_point_idx != None:
-                        generated_code = example.middle[:example.trigger_point_idx]+generated_code
+                        generated_code = example.middle[:example.trigger_point_idx+1]+generated_code
                     
                 results.append({
                     "id": example.task_id,

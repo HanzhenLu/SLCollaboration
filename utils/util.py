@@ -72,10 +72,9 @@ TRIGGER_POINT = [
 
 def find_min_end(s: str, lst: List[str]):
     min_end = None
+    tokens = re.findall(r'[^\w\s]+|\w+', s)
     for sub in lst:
-        if not sub:  # 跳过空字符串
-            continue
-        if sub in s:
+        if sub in tokens:
             start = s.find(sub)
             end = start + len(sub) - 1
             if (min_end is None) or (end < min_end):
@@ -100,6 +99,11 @@ class Example:
         self.full_line_relevant_stmts = full_line_relevant_stmts
         self.full_line_relevant_codes = full_line_relevant_codes
         self.small_relevant_local_stmts = small_relevant_local_stmts
+        self.trigger_point_idx = find_min_end(self.middle, TRIGGER_POINT)
+    
+    # 由于之前处理的时候find_min_end写错了，导致已经被压缩至.pkl的数据有问题，调用这个函数可以清除这个错误
+    # 后续重新处理的数据就不需要再调用了
+    def update_trigger_point_idx(self):
         self.trigger_point_idx = find_min_end(self.middle, TRIGGER_POINT)
 
 class CodeBlock(object):
